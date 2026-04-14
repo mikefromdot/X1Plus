@@ -164,5 +164,9 @@ function awaken(){
             if (datum.gpio) {
                 _handleButton(datum.gpio.button, datum.gpio.event);
             }
+            if (datum.restore_camera_rtsp !== undefined && X1Plus.RecordManager) {
+                console.log("[x1p] camera_watchdog: restoring RTSP server to", datum.restore_camera_rtsp);
+                X1Plus.RecordManager.rtspServerOn = datum.restore_camera_rtsp;
+            }
     });
 }
