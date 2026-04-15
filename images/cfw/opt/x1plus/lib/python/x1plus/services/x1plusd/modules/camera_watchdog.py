@@ -56,6 +56,12 @@ PRINTER_JSON          = "/config/screen/printer.json"
 # sleeps 5 s between stop and start, so 8 s total is comfortable.
 RESTART_SETTLE_TIME   = 8
 
+# On boot, x1plusd starts before ipcam is fully ready. We skip the first
+# probe to avoid killing ipcam during its own startup sequence.
+# ipcam logs "wait 2 seconds before starting streaming" on boot, and the
+# full liveview flow takes ~10s to initialise. 60s is conservative.
+BOOT_GRACE_PERIOD     = 60
+
 RTSP_RESTORE_RETRIES  = 3
 RTSP_RESTORE_INTERVAL = 5
 
@@ -127,35 +133,36 @@ class CameraWatchdog:
 
     async def _probe_camera(self) -> bool:
         """
-        Probe at the RTSP layer via TLS + OPTIONS.
+        Probe ipcam by completing a TLS handshake on port 322.
 
-        When the MPP session pool is exhausted ipcam keeps accepting TCP
-        but can't serve RTSP. OPTIONS requires no auth and consumes no
-        hardware session. A valid RTSP/1.0 response means ipcam is healthy.
+        A TLS handshake is sufficient to determine whether ipcam is alive
+        and its network stack is functional, without sending any RTSP data.
+        Sending RTSP OPTIONS and immediately disconnecting was observed to
+        trigger a "Liveview failed to open" error in bbl_screen, likely
+        because ipcam emits a DDS status event when a client disconnects
+        unexpectedly that bbl_screen misinterprets as a stream failure.
+
+        A TLS-only probe is invisible to the RTSP layer and causes no
+        side effects. If ipcam is truly dead or hung, the TLS handshake
+        will either be refused (ECONNREFUSED) or time out.
         """
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode    = ssl.CERT_NONE
 
         try:
-            reader, writer = await asyncio.wait_for(
+            _, writer = await asyncio.wait_for(
                 asyncio.open_connection(IPCAM_HOST, IPCAM_PORT, ssl=ssl_ctx),
                 timeout=PROBE_TIMEOUT,
             )
-            try:
-                writer.write(b"OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n")
-                await writer.drain()
-                data = await asyncio.wait_for(reader.read(256), timeout=PROBE_TIMEOUT)
-                ok = data.startswith(b"RTSP/1.0")
-                if not ok:
-                    logger.warning(f"unexpected RTSP probe response: {data[:80]!r}")
-                return ok
-            finally:
-                writer.close()
-                await writer.wait_closed()
+            # TLS handshake succeeded — ipcam is alive.
+            # Close immediately without sending any RTSP data.
+            writer.close()
+            await writer.wait_closed()
+            return True
 
         except (asyncio.TimeoutError, OSError, ssl.SSLError) as e:
-            logger.warning(f"camera RTSP probe failed: {e}")
+            logger.warning(f"camera probe failed: {e}")
             return False
 
     async def _restore_rtsp(self):
@@ -228,12 +235,16 @@ class CameraWatchdog:
             await self._restore_rtsp()
 
     async def task(self):
-        logger.info("camera watchdog started")
+        logger.info(
+            f"camera watchdog started, waiting {BOOT_GRACE_PERIOD}s "
+            "boot grace period before first probe"
+        )
+        await asyncio.sleep(BOOT_GRACE_PERIOD)
+
         while True:
             interval = self.daemon.settings.get(
                 "camera.watchdog.interval", DEFAULT_INTERVAL
             )
-            await asyncio.sleep(interval)
 
             if not await self._probe_camera():
                 rtsp_enabled = self._rtsp_was_on()
@@ -241,6 +252,8 @@ class CameraWatchdog:
                 await asyncio.sleep(interval)
             else:
                 logger.debug("camera RTSP probe OK")
+
+            await asyncio.sleep(interval)
 
 
 def load(daemon):
