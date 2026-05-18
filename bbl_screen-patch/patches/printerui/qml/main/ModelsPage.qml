@@ -1,0 +1,791 @@
+import QtQuick 2.12
+import QtQuick.Controls 2.12
+import QtQuick.Shapes 1.12
+import UIBase 1.0
+import Printer 1.0
+import X1PlusNative 1.0
+
+import ".."
+import "../models"
+import "qrc:/uibase/qml/widgets"
+import "../X1Plus.js" as X1Plus
+
+BaseTabPage {
+    property bool hadVisible: false
+    onVisibleChanged: {
+        DeviceManager.activeDeviceInfos(DeviceManager.DI_Storage, visible)
+        if (!visible) return
+        if (stack.depth === 1 && !hadVisible) {
+            activePage = keys[ModelManager.perferSource]
+            hadVisible = true
+        }
+    }
+    id: tab
+    subdir: "models"
+    pages: [
+        { name: "Preset", title: qsTr("Internal") },
+        { name: "Sdcard", title: qsTr("SD Card") },
+        { name: "Usb", title: qsTr("USB") },
+        { name: "SdcardCache", title: qsTr("Print Cache") },
+    ]
+    property var keys: UIBase.enumKeys("ModelManager", "Source")
+    pageHandler: function handle() {
+        if (activePage === "Usb") {
+            usbOverlay.visible = true;
+            if (stack) stack.enabled = false;
+            usbRefreshDrives();
+            return true;
+        }
+        usbOverlay.visible = false;
+        if (stack) stack.enabled = true;
+        usbSelectedPath = "";
+        usbSelectedMeta = null;
+        usbSelectedTray = null;
+        usbPickerOpen = false;
+        if (stack.depth == 1)
+            ModelManager.source = keys.indexOf(tab.activePage)
+        if (stack && stack.depth === 2)
+           stack.pop();
+    }
+    Component.onCompleted: {
+        activePage = "ModelList"
+        pageIndicator.currentIndex = -1
+    }
+
+    // ── USB state ────────────────────────────────────────────────────────────
+    property var usbDrives: []
+    property string usbCurrentPath: ""
+    property string usbRootPath: ""
+    property var usbEntries: []
+    property var usbMetaCache: ({})
+    property string usbSelectedPath: ""
+    property var usbSelectedMeta: null
+    property var usbSelectedTray: null
+    property bool usbPickerOpen: false
+    property bool usbUseAms: PrintManager.feeder.hasAms
+    property bool usbBedLeveling: true
+    property bool usbFlowCali: true
+    property bool usbTimelapse: false
+
+    function usbTrayLabel(idx) {
+        return ["A","B","C","D"][Math.floor(idx / 4)] + (idx % 4 + 1);
+    }
+
+    function usbRefreshDrives() {
+        var result = X1PlusNative.popen("awk '$2 ~ /^\\/media\\/usb/ {print $2}' /proc/mounts");
+        if (!result || result.trim().length === 0) {
+            usbDrives = [];
+        } else {
+            usbDrives = result.split("\n").filter(function(s) { return s.trim().length > 0; });
+        }
+        if (usbDrives.length === 0) {
+            usbCurrentPath = "";
+            usbRootPath = "";
+            usbEntries = [];
+        } else if (usbRootPath === "" || usbDrives.indexOf(usbRootPath) < 0) {
+            usbNavigateTo(usbDrives[0]);
+        }
+    }
+
+    function usbNavigateTo(path) {
+        if (usbDrives.length > 0) usbRootPath = usbDrives[0];
+        usbCurrentPath = path;
+        usbSelectedPath = "";
+        usbSelectedMeta = null;
+        try {
+            usbEntries = JSON.parse(X1PlusNative.listDir(path));
+        } catch(e) {
+            usbEntries = [];
+        }
+    }
+
+    function usbGetMeta(fullPath) {
+        if (usbMetaCache[fullPath] !== undefined)
+            return usbMetaCache[fullPath];
+        var meta = { thumbnail: "", timeEstimate: 0, weightEstimate: 0.0 };
+        try {
+            meta = JSON.parse(X1PlusNative.parseGcodeMetadata(fullPath));
+        } catch(e) {}
+        usbMetaCache[fullPath] = meta;
+        return meta;
+    }
+
+    function usbParentPath(path) {
+        var idx = path.lastIndexOf("/");
+        return idx > 0 ? path.substring(0, idx) : path;
+    }
+
+    function usbBaseName(path) {
+        var idx = path.lastIndexOf("/");
+        return idx >= 0 ? path.substring(idx + 1) : path;
+    }
+
+    Timer {
+        id: usbDriveTimer
+        interval: 5000
+        running: usbOverlay.visible
+        repeat: true
+        onTriggered: usbRefreshDrives()
+    }
+
+    // ── USB overlay ──────────────────────────────────────────────────────────
+    Item {
+        id: usbOverlay
+        visible: false
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.topMargin: barHeight
+        anchors.bottom: parent.bottom
+        z: 10
+
+        Rectangle {
+            anchors.fill: parent
+            color: Colors.gray_700
+        }
+
+        Item {
+            id: usbContent
+            anchors.fill: parent
+            anchors.margins: 16
+            visible: usbSelectedPath === ""
+
+            // No drives message
+            Text {
+                anchors.centerIn: parent
+                visible: usbDrives.length === 0
+                font: Fonts.body_38
+                color: Colors.gray_500
+                text: qsTr("No USB drives connected")
+            }
+
+            // Drive selector row (shown when >1 drive)
+            Row {
+                id: driveSelectorRow
+                visible: usbDrives.length > 1
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: usbDrives.length > 1 ? 44 : 0
+                spacing: 8
+
+                Repeater {
+                    model: usbDrives
+                    delegate: ZButton {
+                        type: ZButtonAppearance.Secondary
+                        text: modelData
+                        checked: usbRootPath === modelData
+                        onClicked: {
+                            usbRootPath = modelData;
+                            usbNavigateTo(modelData);
+                        }
+                    }
+                }
+            }
+
+            // Current path breadcrumb
+            Text {
+                id: pathText
+                visible: usbDrives.length > 0
+                anchors.top: driveSelectorRow.bottom
+                anchors.topMargin: usbDrives.length > 1 ? 4 : 0
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 28
+                verticalAlignment: Text.AlignVCenter
+                font: Fonts.body_24
+                color: Colors.gray_400
+                elide: Text.ElideLeft
+                text: usbCurrentPath
+            }
+
+            // No files message (overlaid on grid area)
+            Text {
+                anchors.centerIn: usbGrid
+                visible: usbDrives.length > 0 && usbGrid.model.length === 0
+                font: Fonts.body_38
+                color: Colors.gray_500
+                text: qsTr("No files found")
+                z: 1
+            }
+
+            // File grid
+            GridView {
+                id: usbGrid
+                visible: usbDrives.length > 0
+                anchors.top: pathText.bottom
+                anchors.topMargin: 4
+                anchors.bottom: usbContent.bottom
+                width: cellWidth * 4
+                anchors.horizontalCenter: parent.horizontalCenter
+                cellWidth: 251 + 15
+                cellHeight: 266 + 14
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                snapMode: GridView.SnapToRow
+                highlightFollowsCurrentItem: false
+
+                model: usbCurrentPath !== usbRootPath
+                    ? [{name: "..", isDir: true, size: 0, isParent: true}].concat(usbEntries)
+                    : usbEntries
+
+                delegate: Item {
+                    width: 252
+                    height: 266
+
+                    property string entryFullPath: usbCurrentPath + "/" + modelData.name
+                    property var meta: (!modelData.isDir && !modelData.isParent)
+                        ? usbGetMeta(entryFullPath)
+                        : null
+                    property bool isGcode: !modelData.isDir && !modelData.isParent &&
+                        (modelData.name.slice(-6).toLowerCase() === ".gcode" ||
+                         (modelData.name.slice(-4).toLowerCase() === ".3mf" &&
+                          meta !== null && meta.hasPrintableGcode === true))
+                    property bool isSelectable: !modelData.isDir && !modelData.isParent &&
+                        (modelData.name.slice(-6).toLowerCase() === ".gcode" ||
+                         modelData.name.slice(-4).toLowerCase() === ".3mf")
+
+                    Rectangle {
+                        id: imgPanel
+                        width: 252
+                        height: 188
+                        radius: 15
+                        color: Colors.gray_500
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            visible: meta !== null && meta.thumbnail && meta.thumbnail.length > 0
+                            source: (meta !== null && meta.thumbnail && meta.thumbnail.length > 0)
+                                ? "data:image/png;base64," + meta.thumbnail : ""
+                            fillMode: Image.PreserveAspectCrop
+                            cache: false
+                        }
+
+                        Text {
+                            anchors.centerIn: parent
+                            visible: modelData.isDir
+                            font.pixelSize: 72
+                            color: Colors.gray_300
+                            text: modelData.isParent ? "↑" : "▶"
+                        }
+
+                        Text {
+                            anchors.centerIn: parent
+                            visible: !modelData.isDir && !modelData.isParent &&
+                                     (meta === null || !meta.thumbnail || meta.thumbnail.length === 0)
+                            font.pixelSize: 48
+                            color: Colors.gray_400
+                            text: "≡"
+                        }
+                    }
+
+                    MarginPanel {
+                        width: parent.width
+                        anchors.top: imgPanel.bottom
+                        anchors.bottom: parent.bottom
+                        radius: 15
+                        topRadiusOff: true
+                        color: Colors.gray_600
+
+                        Text {
+                            id: entryTitle
+                            anchors.left: parent.left
+                            anchors.leftMargin: 15
+                            anchors.right: parent.right
+                            anchors.rightMargin: 15
+                            anchors.top: parent.top
+                            anchors.topMargin: 8
+                            maximumLineCount: 1
+                            font: Fonts.body_24
+                            color: Colors.gray_200
+                            text: modelData.name
+                            clip: true
+                        }
+
+                        Text {
+                            id: entryInfo
+                            anchors.left: parent.left
+                            anchors.leftMargin: 15
+                            anchors.right: parent.right
+                            anchors.rightMargin: 8
+                            anchors.top: entryTitle.bottom
+                            anchors.topMargin: 6
+                            height: 22
+                            verticalAlignment: Text.AlignVCenter
+                            font: Fonts.body_20
+                            color: Colors.gray_200
+                            visible: meta !== null && (meta.timeEstimate > 0 || meta.weightEstimate > 0)
+                            text: {
+                                var parts = [];
+                                if (meta && meta.timeEstimate > 0)
+                                    parts.push(Printer.durationString(meta.timeEstimate));
+                                if (meta && meta.weightEstimate > 0)
+                                    parts.push(meta.weightEstimate.toFixed(1) + "g");
+                                return parts.join("  ");
+                            }
+                        }
+                    }
+
+                    TapHandler {
+                        onTapped: {
+                            if (modelData.isParent) {
+                                usbNavigateTo(usbParentPath(usbCurrentPath));
+                            } else if (modelData.isDir) {
+                                usbNavigateTo(usbCurrentPath + "/" + modelData.name);
+                            } else if (isSelectable) {
+                                var path = usbCurrentPath + "/" + modelData.name;
+                                usbSelectedPath = path;
+                                usbSelectedMeta = usbGetMeta(path);
+                                usbSelectedTray = null;
+                                usbPickerOpen = false;
+                            }
+                        }
+                    }
+                }
+            }
+
+            SimplePager {
+                anchors.right: usbGrid.right
+                anchors.bottom: usbContent.bottom
+                anchors.bottomMargin: 60
+                visible: usbDrives.length > 0
+                target: usbGrid
+                pageSize: usbGrid.cellHeight * 2
+                onStepTo: usbGrid.contentY = position
+            }
+        }
+
+        // ── USB print confirmation ───────────────────────────────────────────
+        Item {
+            id: usbPrintConfirm
+            anchors.fill: parent
+            anchors.margins: 16
+            visible: usbSelectedPath !== ""
+
+            MarginPanel {
+                id: confirmPoster
+                width: 500
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+
+                color: Colors.gray_600
+
+                Image {
+                    anchors.fill: parent
+                    visible: usbSelectedMeta !== null && usbSelectedMeta.thumbnail && usbSelectedMeta.thumbnail.length > 0
+                    source: (usbSelectedMeta !== null && usbSelectedMeta.thumbnail && usbSelectedMeta.thumbnail.length > 0)
+                        ? "data:image/png;base64," + usbSelectedMeta.thumbnail : ""
+                    fillMode: Image.PreserveAspectFit
+                    cache: false
+                }
+
+                Text {
+                    anchors.centerIn: parent
+                    visible: usbSelectedMeta === null || !usbSelectedMeta.thumbnail || usbSelectedMeta.thumbnail.length === 0
+                    font.pixelSize: 100
+                    color: Colors.gray_400
+                    text: "≡"
+                }
+
+                Shape {
+                    id: posterInfoBar
+                    width: parent.width
+                    height: 112
+                    anchors.bottom: parent.bottom
+                    property real barRadius: 15
+
+                    ShapePath {
+                        fillColor: "#66000000"
+                        strokeColor: "transparent"
+                        startX: 0; startY: 0
+                        PathLine { x: posterInfoBar.width; y: 0 }
+                        PathLine { x: posterInfoBar.width; y: posterInfoBar.height - posterInfoBar.barRadius }
+                        PathArc  { radiusX: posterInfoBar.barRadius; radiusY: posterInfoBar.barRadius
+                                   x: posterInfoBar.width - posterInfoBar.barRadius; y: posterInfoBar.height }
+                        PathLine { x: posterInfoBar.barRadius; y: posterInfoBar.height }
+                        PathArc  { radiusX: posterInfoBar.barRadius; radiusY: posterInfoBar.barRadius
+                                   x: 0; y: posterInfoBar.height - posterInfoBar.barRadius }
+                        PathLine { x: 0; y: 0 }
+                    }
+
+                    Text {
+                        id: posterTitle
+                        anchors.left: parent.left
+                        anchors.leftMargin: 15
+                        anchors.top: parent.top
+                        anchors.topMargin: 10
+                        width: parent.width - 30
+                        font: Fonts.head_30
+                        color: Colors.white_900
+                        elide: Text.ElideRight
+                        clip: true
+                        text: usbBaseName(usbSelectedPath)
+                    }
+
+                    ZLineSplitter {
+                        id: posterInfoSplit
+                        alignment: Qt.AlignTop
+                        anchors.top: posterTitle.bottom
+                        anchors.topMargin: 10
+                        padding: 20
+                        color: Colors.brand
+                    }
+
+                    ListView {
+                        height: 47
+                        anchors.left: posterInfoSplit.left
+                        anchors.right: posterInfoSplit.right
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 5
+                        orientation: ListView.Horizontal
+                        boundsBehavior: ListView.StopAtBounds
+                        model: {
+                            var items = [];
+                            if (usbSelectedMeta && usbSelectedMeta.timeEstimate > 0)
+                                items.push({ key: "time",   value: Printer.durationString(usbSelectedMeta.timeEstimate) });
+                            if (usbSelectedMeta && usbSelectedMeta.weightEstimate > 0)
+                                items.push({ key: "weight", value: usbSelectedMeta.weightEstimate.toFixed(1) + qsTr("g") });
+                            return items;
+                        }
+                        delegate: Item {
+                            width: ListView.view.width / 3
+                            height: ListView.view.height
+                            Image {
+                                id: posterInfoIcon
+                                anchors.left: parent.left
+                                anchors.leftMargin: 20
+                                anchors.verticalCenter: parent.verticalCenter
+                                source: "../../icon/" + modelData.key + ".svg"
+                                cache: false
+                            }
+                            Text {
+                                anchors.left: posterInfoIcon.right
+                                anchors.leftMargin: 5
+                                anchors.verticalCenter: parent.verticalCenter
+                                font: Fonts.body_30
+                                color: Colors.gray_100
+                                text: modelData.value
+                            }
+                        }
+                    }
+                }
+            }
+
+            MarginPanel {
+                id: infoPanel
+                anchors.left: confirmPoster.right
+                anchors.leftMargin: 23
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                leftMargin: 23
+                rightMargin: 21
+                topMargin: 20
+                bottomMargin: 20
+                color: Colors.gray_800
+
+                // ── not-printable message ────────────────────────────────
+                Text {
+                    anchors.top: parent.top
+                    anchors.topMargin: 30
+                    anchors.left: parent.left
+                    anchors.leftMargin: 40
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    visible: usbSelectedMeta !== null && usbSelectedMeta.hasPrintableGcode !== true
+                    font: Fonts.body_26
+                    color: Colors.gray_400
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    text: qsTr("Model only\nCannot print directly")
+                }
+
+                // ── filament header ──────────────────────────────────────
+                Text {
+                    id: filamentHeader
+                    visible: usbSelectedMeta !== null && usbSelectedMeta.hasPrintableGcode === true
+                    anchors.top: parent.top
+                    anchors.topMargin: 15
+                    anchors.left: parent.left
+                    anchors.leftMargin: 40
+                    font: Fonts.body_24
+                    color: Colors.gray_300
+                    text: usbPickerOpen
+                        ? qsTr("Select AMS tray")
+                        : (usbUseAms && PrintManager.feeder.hasAms
+                            ? qsTr("Filament selection") : qsTr("Filament"))
+                }
+
+                // ── single filament swatch ───────────────────────────────
+                Item {
+                    id: usbFilamentSwatch
+                    visible: filamentHeader.visible
+                    anchors.top: filamentHeader.bottom
+                    anchors.topMargin: 10
+                    anchors.left: parent.left
+                    anchors.leftMargin: 40
+                    width: 120
+                    height: 110
+
+                    property bool amsActive: usbUseAms && PrintManager.feeder.hasAms
+                    property var firstFilament: (usbSelectedMeta && usbSelectedMeta.filaments &&
+                                                 usbSelectedMeta.filaments.length > 0)
+                                                ? usbSelectedMeta.filaments[0] : null
+                    property string swatchColor: (usbSelectedTray && usbSelectedTray.colored)
+                                                 ? usbSelectedTray.color
+                                                 : (firstFilament ? firstFilament.color : "#808080")
+                    property string swatchType: usbSelectedTray
+                                                ? (usbSelectedTray.typeName + "")
+                                                : (firstFilament ? (firstFilament.type || "?") : "?")
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 10
+                        color: parent.swatchColor
+
+                        Text {
+                            anchors.fill: parent
+                            anchors.margins: 5
+                            anchors.bottomMargin: usbFilamentSwatch.amsActive ? 22 : 5
+                            font: Fonts.body_24
+                            minimumPixelSize: 8
+                            fontSizeMode: Text.Fit
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            color: "white"
+                            text: usbFilamentSwatch.swatchType
+                        }
+
+                        Rectangle {
+                            visible: usbFilamentSwatch.amsActive
+                            width: parent.width
+                            height: 22
+                            anchors.bottom: parent.bottom
+                            color: Qt.rgba(0, 0, 0, 0.55)
+                            radius: 10
+                            Rectangle {
+                                width: parent.width
+                                height: 10
+                                anchors.top: parent.top
+                                color: parent.color
+                            }
+                            Text {
+                                anchors.centerIn: parent
+                                font: Fonts.body_16
+                                color: "white"
+                                text: usbSelectedTray ? usbTrayLabel(usbSelectedTray.index) : "--"
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: -3
+                            color: "transparent"
+                            radius: 13
+                            border.width: usbPickerOpen ? 2 : 0
+                            border.color: Colors.brand
+                        }
+                    }
+
+                    TapHandler {
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        enabled: usbFilamentSwatch.amsActive
+                        onTapped: usbPickerOpen = !usbPickerOpen
+                    }
+                }
+
+                // ── AMS tray picker ───────────────────────────────────────
+                Rectangle {
+                    id: usbTrayPicker
+                    visible: usbPickerOpen && usbUseAms && PrintManager.feeder.hasAms
+                    z: 5
+                    anchors.top: usbFilamentSwatch.bottom
+                    anchors.topMargin: 8
+                    anchors.left: parent.left
+                    anchors.leftMargin: 30
+                    anchors.right: parent.right
+                    anchors.rightMargin: 30
+                    height: Math.ceil((PrintManager.feeder.hasAms ? PrintManager.feeder.amsTrays.length : 0) / 4) * 68 + 16
+                    radius: 12
+                    color: Colors.gray_500
+
+                    GridView {
+                        x: 8; y: 8
+                        width: parent.width - 16
+                        height: parent.height - 16
+                        cellWidth: Math.floor(width / 4)
+                        cellHeight: 68
+                        interactive: false
+                        model: PrintManager.feeder.hasAms ? PrintManager.feeder.amsTrays : []
+
+                        delegate: Item {
+                            property var td: modelData
+                            width: GridView.view.cellWidth - 8
+                            height: GridView.view.cellHeight - 8
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 10
+                                color: td.exist && td.colored ? td.color : Colors.gray_600
+                                border.width: 1
+                                border.color: Colors.gray_400
+
+                                Text {
+                                    anchors.top: parent.top
+                                    anchors.topMargin: 3
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    font: Fonts.body_16
+                                    color: Colors.gray_200
+                                    text: usbTrayLabel(td.index)
+                                }
+
+                                Text {
+                                    anchors.fill: parent
+                                    anchors.topMargin: 20
+                                    anchors.margins: 4
+                                    font: Fonts.body_20
+                                    minimumPixelSize: 8
+                                    fontSizeMode: Text.Fit
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    color: "white"
+                                    text: td.exist ? (td.typeName + "") : "—"
+                                }
+                            }
+
+                            TapHandler {
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
+                                onTapped: {
+                                    usbSelectedTray = td;
+                                    usbPickerOpen = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── checkboxes ───────────────────────────────────────────
+                ListView {
+                    id: switchList
+                    anchors.bottom: infoSplit.top
+                    anchors.bottomMargin: 15
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.margins: 30
+                    height: contentHeight
+                    visible: usbSelectedMeta !== null && usbSelectedMeta.hasPrintableGcode === true
+                    spacing: 8
+                    model: [
+                        { text: qsTr("Use AMS"),          checked: usbUseAms,      vis: PrintManager.feeder.hasAms, key: "ams" },
+                        { text: qsTr("Bed Leveling"),     checked: usbBedLeveling, vis: true,                       key: "bed" },
+                        { text: qsTr("Flow Calibration"), checked: usbFlowCali,    vis: true,                       key: "flow" },
+                        { text: qsTr("Timelapse"),        checked: usbTimelapse,   vis: true,                       key: "tl" }
+                    ]
+                    delegate: Item {
+                        width: parent.width
+                        height: modelData.vis ? checkBox.height : 0
+                        visible: modelData.vis
+                        ZCheckBox {
+                            id: checkBox
+                            font: Fonts.body_28
+                            textColor: StateColors.get("gray_100")
+                            text: modelData.text
+                            tapMargin: 5
+                            checked: modelData.checked
+                            onCheckedChanged: {
+                                if (modelData.key === "ams")  usbUseAms      = checked;
+                                else if (modelData.key === "bed")  usbBedLeveling = checked;
+                                else if (modelData.key === "flow") usbFlowCali    = checked;
+                                else if (modelData.key === "tl")   usbTimelapse   = checked;
+                            }
+                        }
+                    }
+                }
+
+                ZLineSplitter {
+                    id: infoSplit
+                    alignment: Qt.AlignBottom
+                    padding: 30
+                    offset: 122
+                    color: Colors.brand
+                }
+
+                ZButton {
+                    id: backBtn
+                    width: 131
+                    anchors.left: infoSplit.left
+                    anchors.top: infoSplit.bottom
+                    anchors.topMargin: 29
+                    paddingX: 15
+                    verticalTapMargin: 10
+                    text: qsTr("Back")
+                    onClicked: {
+                        usbSelectedPath = "";
+                        usbSelectedMeta = null;
+                        usbSelectedTray = null;
+                        usbPickerOpen = false;
+                    }
+                }
+
+                ZButton {
+                    width: 200
+                    anchors.right: infoSplit.right
+                    anchors.top: backBtn.top
+                    verticalTapMargin: 10
+                    checked: true
+                    visible: usbSelectedMeta !== null && usbSelectedMeta.hasPrintableGcode === true
+                    text: qsTr("Print now")
+                    onClicked: {
+                        var path = usbSelectedPath;
+                        var meta = usbSelectedMeta;
+                        usbSelectedPath = "";
+                        usbSelectedMeta = null;
+                        var is3mf = path.slice(-4).toLowerCase() === ".3mf";
+                        if (is3mf) {
+                            X1Plus.DDS.publish("device/request/print", {
+                                command: "project_file",
+                                param: meta.platePath,
+                                url: "file://" + path,
+                                project_id: "0",
+                                profile_id: "0",
+                                task_id: "0",
+                                subtask_id: "0",
+                                subtask_name: "",
+                                md5: "",
+                                timelapse: usbTimelapse,
+                                bed_type: "auto",
+                                bed_levelling: usbBedLeveling,
+                                flow_cali: usbFlowCali,
+                                vibration_cali: true,
+                                layer_inspect: true,
+                                ams_mapping: (function() {
+                                    if (!usbUseAms || !usbSelectedTray) return [];
+                                    var count = (meta && meta.filaments && meta.filaments.length > 0)
+                                        ? meta.filaments.length : 1;
+                                    var arr = [];
+                                    for (var i = 0; i < count; i++) arr.push(usbSelectedTray.index);
+                                    return arr;
+                                })(),
+                                use_ams: usbUseAms,
+                                sequence_id: "0"
+                            });
+                        } else {
+                            X1Plus.DDS.publish("device/request/print", {
+                                command: "gcode_file",
+                                param: path,
+                                sequence_id: 0,
+                                use_ams: usbUseAms,
+                                bed_leveling: usbBedLeveling,
+                                flow_cali: usbFlowCali,
+                                timelapse: usbTimelapse
+                            });
+                        }
+                        navigator.activePage = "Home";
+                    }
+                }
+            }
+        }
+    }
+}
