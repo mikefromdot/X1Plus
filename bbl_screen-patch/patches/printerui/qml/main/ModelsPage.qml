@@ -120,6 +120,19 @@ BaseTabPage {
         return idx >= 0 ? path.substring(idx + 1) : path;
     }
 
+    function usbFindMatchingTray(meta) {
+        if (!meta || !meta.filaments || meta.filaments.length === 0) return null;
+        var targetType = (meta.filaments[0].type || "").toLowerCase();
+        if (!targetType) return null;
+        var trays = PrintManager.feeder.amsTrays;
+        for (var i = 0; i < trays.length; i++) {
+            var td = trays[i];
+            if (td.exist && (td.typeName + "").toLowerCase() === targetType)
+                return td;
+        }
+        return null;
+    }
+
     Timer {
         id: usbDriveTimer
         interval: 5000
@@ -337,7 +350,7 @@ BaseTabPage {
                                 var path = usbCurrentPath + "/" + modelData.name;
                                 usbSelectedPath = path;
                                 usbSelectedMeta = usbGetMeta(path);
-                                usbSelectedTray = null;
+                                usbSelectedTray = usbFindMatchingTray(usbSelectedMeta);
                                 usbPickerOpen = false;
                             }
                         }
