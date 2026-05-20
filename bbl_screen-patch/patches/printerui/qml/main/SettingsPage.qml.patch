@@ -1,13 +1,13 @@
 --- printer_ui-orig/printerui/qml/main/SettingsPage.qml
 +++ printer_ui/printerui/qml/main/SettingsPage.qml
-@@ -6,15 +6,14 @@
+@@ -6,15 +6,15 @@
  
  BaseTabPage {
      subdir: "settings"
 -    dots: [false, (updater.hasNewVersion || updater.consistency), false, maintain.carbon || maintain.screws]
 -    pages: [
 -        { name: "Account", title: qsTr("Account") },
-+    dots: (NetworkManager.isLanOnly ? [] : [false]).concat([screenSaver.newX1pOtaAvailable || updater.hasNewVersion || updater.consistency, false, maintain.carbon || maintain.screws, false])
++    dots: (NetworkManager.isLanOnly ? [] : [false]).concat([screenSaver.newX1pOtaAvailable || updater.hasNewVersion || updater.consistency, false, maintain.carbon || maintain.screws, false, false])
 +    pages: (NetworkManager.isLanOnly ? [] : [ { name: "Account", title: qsTr("Account") } ]).concat([
          { name: "Device", title: qsTr("General") },
 +        //{ name: "X1PLogs", title: qsTr("Logs") },
@@ -17,7 +17,8 @@
 -        return p.name !== "Account" || !NetworkManager.isLanOnly
 -    })
 +        { name: "Maintenance", title: qsTr("Tools") },
-+        { name: "Hardware", title: qsTr("Hardware") }
++        { name: "Hardware", title: qsTr("Hardware") },
++        { name: "X1PlusOptions", title: qsTr("X1Plus") }
 +    ])
  
      property var updater: DeviceManager.updater

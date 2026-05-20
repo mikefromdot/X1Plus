@@ -103,7 +103,7 @@
  <file>printerui/qml/printer/AMSUseBootPage.qml</file>
  <file>printerui/qml/printer/AdjustPage.qml</file>
  <file>printerui/qml/printer/AutoRefillPage.qml</file>
-@@ -197,32 +246,45 @@
+@@ -197,32 +246,46 @@
  <file>printerui/qml/printer/PrintSkipPage.qml</file>
  <file>printerui/qml/printer/Sector.qml</file>
  <file>printerui/qml/printer/SelfTestPage.qml</file>
@@ -149,6 +149,7 @@
  <file>printerui/qml/settings/WifiListPage.qml</file>
  <file>printerui/qml/settings/WifiSetupPage.qml</file>
 +<file>printerui/qml/settings/X1PlusOTADialog.qml</file>
++<file>printerui/qml/settings/X1PlusOptionsPage.qml</file>
  <file>printerui/qml/wizard/Calibrate1Page.qml</file>
  <file>printerui/qml/wizard/CalibratePage.qml</file>
  <file>printerui/qml/wizard/CalibratingPage.qml</file>
