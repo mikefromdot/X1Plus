@@ -93,7 +93,9 @@ BaseTabPage {
         usbSelectedPath = "";
         usbSelectedMeta = null;
         try {
-            usbEntries = JSON.parse(X1PlusNative.listDir(path));
+            usbEntries = JSON.parse(X1PlusNative.listDir(path)).filter(function(e) {
+                return e.name.charAt(0) !== '.' && e.name !== "System Volume Information";
+            });
         } catch(e) {
             usbEntries = [];
         }
@@ -316,26 +318,39 @@ BaseTabPage {
                             clip: true
                         }
 
-                        Text {
+                        Row {
                             id: entryInfo
                             anchors.left: parent.left
                             anchors.leftMargin: 15
-                            anchors.right: parent.right
-                            anchors.rightMargin: 8
                             anchors.top: entryTitle.bottom
                             anchors.topMargin: 6
                             height: 22
-                            verticalAlignment: Text.AlignVCenter
-                            font: Fonts.body_20
-                            color: Colors.gray_200
+                            spacing: 10
                             visible: meta !== null && (meta.timeEstimate > 0 || meta.weightEstimate > 0)
-                            text: {
-                                var parts = [];
-                                if (meta && meta.timeEstimate > 0)
-                                    parts.push(Printer.durationString(meta.timeEstimate));
-                                if (meta && meta.weightEstimate > 0)
-                                    parts.push(meta.weightEstimate.toFixed(1) + "g");
-                                return parts.join("  ");
+                            Repeater {
+                                model: {
+                                    var items = [];
+                                    if (meta && meta.timeEstimate > 0)
+                                        items.push({ key: "time",   value: Printer.durationString(meta.timeEstimate) });
+                                    if (meta && meta.weightEstimate > 0)
+                                        items.push({ key: "weight", value: meta.weightEstimate.toFixed(1) + "g" });
+                                    return items;
+                                }
+                                delegate: Row {
+                                    spacing: 4
+                                    Image {
+                                        width: 16; height: 16
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        source: "../../icon/" + modelData.key + ".svg"
+                                        cache: false
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        font: Fonts.body_20
+                                        color: Colors.gray_200
+                                        text: modelData.value
+                                    }
+                                }
                             }
                         }
                     }
