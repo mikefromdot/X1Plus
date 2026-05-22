@@ -40,7 +40,7 @@ BaseTabPage {
         if (stack) stack.enabled = true;
         usbSelectedPath = "";
         usbSelectedMeta = null;
-        usbSelectedTray = null;
+        usbSelectedTrays = [];
         usbPickerOpen = false;
         if (stack.depth == 1)
             ModelManager.source = keys.indexOf(tab.activePage)
@@ -58,9 +58,11 @@ BaseTabPage {
     property string usbRootPath: ""
     property var usbEntries: []
     property var usbMetaCache: ({})
+    property string usbMountsRaw: ""
     property string usbSelectedPath: ""
     property var usbSelectedMeta: null
-    property var usbSelectedTray: null
+    property var usbSelectedTrays: []
+    property int usbPickerFilamentIdx: 0
     property bool usbPickerOpen: false
     property bool usbUseAms: PrintManager.feeder.hasAms
     property bool usbBedLeveling: true
@@ -72,18 +74,28 @@ BaseTabPage {
     }
 
     function usbRefreshDrives() {
-        var result = X1PlusNative.popen("awk '$2 ~ /^\\/media\\/usb/ {print $2}' /proc/mounts");
-        if (!result || result.trim().length === 0) {
+        var result = X1PlusNative.popen("awk '$2 ~ /^\\/media\\/usb/ {print $0}' /proc/mounts");
+        var raw = result ? result.trim() : "";
+        var mountsChanged = (raw !== usbMountsRaw);
+        usbMountsRaw = raw;
+        if (!raw) {
             usbDrives = [];
         } else {
-            usbDrives = result.split("\n").filter(function(s) { return s.trim().length > 0; });
+            usbDrives = raw.split("\n").map(function(line) {
+                return line.split(" ")[1];
+            }).filter(function(s) { return s && s.trim().length > 0; });
         }
         if (usbDrives.length === 0) {
             usbCurrentPath = "";
             usbRootPath = "";
             usbEntries = [];
+            usbMetaCache = {};
         } else if (usbRootPath === "" || usbDrives.indexOf(usbRootPath) < 0) {
+            usbMetaCache = {};
             usbNavigateTo(usbDrives[0]);
+        } else if (mountsChanged) {
+            usbMetaCache = {};
+            usbNavigateTo(usbCurrentPath);
         }
     }
 
@@ -122,17 +134,40 @@ BaseTabPage {
         return idx >= 0 ? path.substring(idx + 1) : path;
     }
 
-    function usbFindMatchingTray(meta) {
-        if (!meta || !meta.filaments || meta.filaments.length === 0) return null;
-        var targetType = (meta.filaments[0].type || "").toLowerCase();
-        if (!targetType) return null;
+    function usbFindMatchingTray(filament) {
+        if (!filament) return null;
+        var targetType = (filament.type || "").toLowerCase();
+        if (!targetType || targetType === "?") return null;
         var trays = PrintManager.feeder.amsTrays;
+        var typeOnlyMatch = null;
         for (var i = 0; i < trays.length; i++) {
             var td = trays[i];
-            if (td.exist && (td.typeName + "").toLowerCase() === targetType)
+            if (!td.exist) continue;
+            var trayType = (td.typeName + "").toLowerCase();
+            var typeMatches = trayType === targetType ||
+                              trayType.indexOf(targetType) >= 0 ||
+                              targetType.indexOf(trayType) >= 0;
+            if (!typeMatches) continue;
+            if (typeOnlyMatch === null) typeOnlyMatch = td;
+            if (filament.color && td.colored && Qt.colorEqual(filament.color, td.color))
                 return td;
         }
-        return null;
+        return typeOnlyMatch;
+    }
+
+    function usbTypeMatches(trayTypeName, filamentType) {
+        if (!filamentType || filamentType === "?") return true;
+        var tray = (trayTypeName + "").toLowerCase();
+        var req  = filamentType.toLowerCase();
+        return tray === req || tray.indexOf(req) >= 0 || req.indexOf(tray) >= 0;
+    }
+
+    function usbAutoAssignTrays(meta) {
+        if (!meta || !meta.filaments) return [];
+        var result = [];
+        for (var i = 0; i < meta.filaments.length; i++)
+            result.push(usbFindMatchingTray(meta.filaments[i]));
+        return result;
     }
 
     Timer {
@@ -365,7 +400,7 @@ BaseTabPage {
                                 var path = usbCurrentPath + "/" + modelData.name;
                                 usbSelectedPath = path;
                                 usbSelectedMeta = usbGetMeta(path);
-                                usbSelectedTray = usbFindMatchingTray(usbSelectedMeta);
+                                usbSelectedTrays = usbAutoAssignTrays(usbSelectedMeta);
                                 usbPickerOpen = false;
                             }
                         }
@@ -546,81 +581,117 @@ BaseTabPage {
                             ? qsTr("Filament selection") : qsTr("Filament"))
                 }
 
-                // ── single filament swatch ───────────────────────────────
+                // ── filament swatches ────────────────────────────────────
                 Item {
-                    id: usbFilamentSwatch
+                    id: swatchContainer
                     visible: filamentHeader.visible
                     anchors.top: filamentHeader.bottom
                     anchors.topMargin: 10
                     anchors.left: parent.left
                     anchors.leftMargin: 40
-                    width: 120
-                    height: 110
+                    anchors.right: parent.right
+                    anchors.rightMargin: 40
+                    height: swatchFlow.height
 
                     property bool amsActive: usbUseAms && PrintManager.feeder.hasAms
-                    property var firstFilament: (usbSelectedMeta && usbSelectedMeta.filaments &&
-                                                 usbSelectedMeta.filaments.length > 0)
-                                                ? usbSelectedMeta.filaments[0] : null
-                    property string swatchColor: (usbSelectedTray && usbSelectedTray.colored)
-                                                 ? usbSelectedTray.color
-                                                 : (firstFilament ? firstFilament.color : "#808080")
-                    property string swatchType: usbSelectedTray
-                                                ? (usbSelectedTray.typeName + "")
-                                                : (firstFilament ? (firstFilament.type || "?") : "?")
 
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: 10
-                        color: parent.swatchColor
+                    Flow {
+                        id: swatchFlow
+                        width: parent.width
+                        spacing: 8
 
-                        Text {
-                            anchors.fill: parent
-                            anchors.margins: 5
-                            anchors.bottomMargin: usbFilamentSwatch.amsActive ? 22 : 5
-                            font: Fonts.body_24
-                            minimumPixelSize: 8
-                            fontSizeMode: Text.Fit
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                            color: "white"
-                            text: usbFilamentSwatch.swatchType
-                        }
+                        Repeater {
+                            model: (usbSelectedMeta && usbSelectedMeta.filaments)
+                                   ? usbSelectedMeta.filaments : []
 
-                        Rectangle {
-                            visible: usbFilamentSwatch.amsActive
-                            width: parent.width
-                            height: 22
-                            anchors.bottom: parent.bottom
-                            color: Qt.rgba(0, 0, 0, 0.55)
-                            radius: 10
-                            Rectangle {
-                                width: parent.width
-                                height: 10
-                                anchors.top: parent.top
-                                color: parent.color
+                            delegate: Item {
+                                id: swatchItem
+                                width: 120
+                                height: 110
+
+                                property int filamentIdx: index
+                                property var assignedTray: swatchItem.filamentIdx < usbSelectedTrays.length
+                                                           ? usbSelectedTrays[swatchItem.filamentIdx] : null
+                                property color swatchColor: modelData ? modelData.color : "#808080"
+                                property color swatchTextColor: {
+                                    var c = swatchItem.swatchColor;
+                                    var lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+                                    return lum > 0.5 ? "#000000" : "#ffffff";
+                                }
+                                property string swatchType: modelData ? (modelData.type || "?") : "?"
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: 10
+                                    color: swatchItem.swatchColor
+
+                                    Text {
+                                        anchors.fill: parent
+                                        anchors.margins: 5
+                                        anchors.bottomMargin: swatchContainer.amsActive ? 22 : 5
+                                        font: Fonts.body_24
+                                        minimumPixelSize: 8
+                                        fontSizeMode: Text.Fit
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                        color: swatchItem.swatchTextColor
+                                        text: swatchItem.swatchType
+                                    }
+
+                                    Rectangle {
+                                        id: trayBadge
+                                        visible: swatchContainer.amsActive
+                                        width: parent.width
+                                        height: 22
+                                        anchors.bottom: parent.bottom
+                                        color: (swatchItem.assignedTray && swatchItem.assignedTray.colored)
+                                               ? swatchItem.assignedTray.color : Qt.rgba(0, 0, 0, 0.55)
+                                        radius: 10
+                                        property color badgeTextColor: {
+                                            var c = trayBadge.color;
+                                            var lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+                                            return lum > 0.5 ? "#000000" : "#ffffff";
+                                        }
+                                        Rectangle {
+                                            width: parent.width
+                                            height: 10
+                                            anchors.top: parent.top
+                                            color: parent.color
+                                        }
+                                        Text {
+                                            anchors.centerIn: parent
+                                            font: Fonts.body_16
+                                            color: trayBadge.badgeTextColor
+                                            text: swatchItem.assignedTray
+                                                  ? usbTrayLabel(swatchItem.assignedTray.index) : "--"
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        anchors.margins: -3
+                                        color: "transparent"
+                                        radius: 13
+                                        border.width: (usbPickerOpen &&
+                                                       usbPickerFilamentIdx === swatchItem.filamentIdx) ? 2 : 0
+                                        border.color: Colors.brand
+                                    }
+                                }
+
+                                TapHandler {
+                                    gesturePolicy: TapHandler.ReleaseWithinBounds
+                                    enabled: swatchContainer.amsActive
+                                    onTapped: {
+                                        if (usbPickerOpen && usbPickerFilamentIdx === swatchItem.filamentIdx) {
+                                            usbPickerOpen = false;
+                                        } else {
+                                            usbPickerFilamentIdx = swatchItem.filamentIdx;
+                                            usbPickerOpen = true;
+                                        }
+                                    }
+                                }
                             }
-                            Text {
-                                anchors.centerIn: parent
-                                font: Fonts.body_16
-                                color: "white"
-                                text: usbSelectedTray ? usbTrayLabel(usbSelectedTray.index) : "--"
-                            }
                         }
-
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.margins: -3
-                            color: "transparent"
-                            radius: 13
-                            border.width: usbPickerOpen ? 2 : 0
-                            border.color: Colors.brand
-                        }
-                    }
-
-                    TapHandler {
-                        gesturePolicy: TapHandler.ReleaseWithinBounds
-                        enabled: usbFilamentSwatch.amsActive
-                        onTapped: usbPickerOpen = !usbPickerOpen
                     }
                 }
 
@@ -629,7 +700,7 @@ BaseTabPage {
                     id: usbTrayPicker
                     visible: usbPickerOpen && usbUseAms && PrintManager.feeder.hasAms
                     z: 5
-                    anchors.top: usbFilamentSwatch.bottom
+                    anchors.top: swatchContainer.bottom
                     anchors.topMargin: 8
                     anchors.left: parent.left
                     anchors.leftMargin: 30
@@ -652,20 +723,34 @@ BaseTabPage {
                             property var td: modelData
                             width: GridView.view.cellWidth - 8
                             height: GridView.view.cellHeight - 8
+                            property bool compatible: {
+                                if (!td.exist) return false;
+                                var filaments = usbSelectedMeta ? usbSelectedMeta.filaments : null;
+                                if (!filaments || usbPickerFilamentIdx >= filaments.length) return true;
+                                return usbTypeMatches(td.typeName + "",
+                                                      filaments[usbPickerFilamentIdx].type || "?");
+                            }
+                            opacity: compatible ? 1.0 : 0.3
 
                             Rectangle {
+                                id: trayCell
                                 anchors.fill: parent
                                 radius: 10
                                 color: td.exist && td.colored ? td.color : Colors.gray_600
                                 border.width: 1
                                 border.color: Colors.gray_400
+                                property color cellTextColor: {
+                                    var c = trayCell.color;
+                                    var lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+                                    return lum > 0.5 ? "#000000" : "#ffffff";
+                                }
 
                                 Text {
                                     anchors.top: parent.top
                                     anchors.topMargin: 3
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     font: Fonts.body_16
-                                    color: Colors.gray_200
+                                    color: trayCell.cellTextColor
                                     text: usbTrayLabel(td.index)
                                 }
 
@@ -678,15 +763,18 @@ BaseTabPage {
                                     fontSizeMode: Text.Fit
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
-                                    color: "white"
+                                    color: trayCell.cellTextColor
                                     text: td.exist ? (td.typeName + "") : "—"
                                 }
                             }
 
                             TapHandler {
                                 gesturePolicy: TapHandler.ReleaseWithinBounds
+                                enabled: compatible
                                 onTapped: {
-                                    usbSelectedTray = td;
+                                    var copy = usbSelectedTrays.slice();
+                                    copy[usbPickerFilamentIdx] = td;
+                                    usbSelectedTrays = copy;
                                     usbPickerOpen = false;
                                 }
                             }
@@ -752,7 +840,7 @@ BaseTabPage {
                     onClicked: {
                         usbSelectedPath = "";
                         usbSelectedMeta = null;
-                        usbSelectedTray = null;
+                        usbSelectedTrays = [];
                         usbPickerOpen = false;
                     }
                 }
@@ -789,12 +877,14 @@ BaseTabPage {
                                 vibration_cali: true,
                                 layer_inspect: true,
                                 ams_mapping: (function() {
-                                    if (!usbUseAms || !usbSelectedTray) return [];
-                                    var count = (meta && meta.filaments && meta.filaments.length > 0)
-                                        ? meta.filaments.length : 1;
-                                    var arr = [];
-                                    for (var i = 0; i < count; i++) arr.push(usbSelectedTray.index);
-                                    return arr;
+                                    if (!usbUseAms || usbSelectedTrays.length === 0) return [];
+                                    var anyAssigned = false;
+                                    for (var i = 0; i < usbSelectedTrays.length; i++)
+                                        if (usbSelectedTrays[i]) { anyAssigned = true; break; }
+                                    if (!anyAssigned) return [];
+                                    return usbSelectedTrays.map(function(t) {
+                                        return t ? t.index : 0;
+                                    });
                                 })(),
                                 use_ams: usbUseAms,
                                 sequence_id: "0"
