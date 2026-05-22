@@ -74,16 +74,23 @@ BaseTabPage {
     }
 
     function usbRefreshDrives() {
-        var result = X1PlusNative.popen("awk '$2 ~ /^\\/media\\/usb/ {print $0}' /proc/mounts");
+        var result = X1PlusNative.popen("awk '$2 ~ /^\\/media\\/usb[0-9]/ {dev=$1; gsub(/[0-9]+$/, \"\", dev); gsub(/.*\\//, \"\", dev); if (system(\"test -d /sys/block/\" dev) == 0) print $0}' /proc/mounts");
         var raw = result ? result.trim() : "";
         var mountsChanged = (raw !== usbMountsRaw);
         usbMountsRaw = raw;
         if (!raw) {
             usbDrives = [];
         } else {
-            usbDrives = raw.split("\n").map(function(line) {
-                return line.split(" ")[1];
-            }).filter(function(s) { return s && s.trim().length > 0; });
+            var seen = {};
+            usbDrives = raw.split("\n").reduce(function(acc, line) {
+                var parts = line.split(" ");
+                var device = parts[0], mount = parts[1];
+                if (mount && mount.trim().length > 0 && !seen[device]) {
+                    seen[device] = true;
+                    acc.push(mount);
+                }
+                return acc;
+            }, []);
         }
         if (usbDrives.length === 0) {
             usbCurrentPath = "";
@@ -92,6 +99,7 @@ BaseTabPage {
             usbMetaCache = {};
         } else if (usbRootPath === "" || usbDrives.indexOf(usbRootPath) < 0) {
             usbMetaCache = {};
+            usbRootPath = usbDrives[0];
             usbNavigateTo(usbDrives[0]);
         } else if (mountsChanged) {
             usbMetaCache = {};
@@ -100,7 +108,6 @@ BaseTabPage {
     }
 
     function usbNavigateTo(path) {
-        if (usbDrives.length > 0) usbRootPath = usbDrives[0];
         usbCurrentPath = path;
         usbSelectedPath = "";
         usbSelectedMeta = null;
@@ -215,15 +222,16 @@ BaseTabPage {
                 visible: usbDrives.length > 1
                 anchors.top: parent.top
                 anchors.left: parent.left
-                anchors.right: parent.right
-                height: usbDrives.length > 1 ? 44 : 0
-                spacing: 8
+                height: usbDrives.length > 1 ? 36 : 0
+                spacing: 6
 
                 Repeater {
                     model: usbDrives
                     delegate: ZButton {
-                        type: ZButtonAppearance.Secondary
-                        text: modelData
+                        width: 100
+                        height: 36
+                        verticalTapMargin: 4
+                        text: qsTr("USB %1").arg(index + 1)
                         checked: usbRootPath === modelData
                         onClicked: {
                             usbRootPath = modelData;
@@ -233,20 +241,20 @@ BaseTabPage {
                 }
             }
 
-            // Current path breadcrumb
+            // Current path breadcrumb (only shown when inside a subdirectory)
             Text {
                 id: pathText
-                visible: usbDrives.length > 0
+                visible: usbDrives.length > 0 && usbCurrentPath !== usbRootPath
                 anchors.top: driveSelectorRow.bottom
-                anchors.topMargin: usbDrives.length > 1 ? 4 : 0
+                anchors.topMargin: 4
                 anchors.left: parent.left
                 anchors.right: parent.right
-                height: 28
+                height: visible ? 28 : 0
                 verticalAlignment: Text.AlignVCenter
                 font: Fonts.body_24
                 color: Colors.gray_400
                 elide: Text.ElideLeft
-                text: usbCurrentPath
+                text: usbCurrentPath.substring(usbRootPath.length)
             }
 
             // No files message (overlaid on grid area)
