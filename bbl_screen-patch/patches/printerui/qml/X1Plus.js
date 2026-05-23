@@ -99,6 +99,7 @@ var NetworkManager = null;
 var PrintTask = null;
 var NetworkEnum = null;
 var printerConfigDir = null;
+var lastUsbPrint = null;
 
 var emulating = _X1PlusNative.getenv("EMULATION_WORKAROUNDS");
 X1Plus.emulating = emulating;

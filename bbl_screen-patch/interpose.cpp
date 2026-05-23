@@ -325,50 +325,184 @@ eject:
         result["weightEstimate"] = 0.0;
 
         bool is3mf = path.endsWith(".3mf", Qt::CaseInsensitive);
-        FILE *fp = nullptr;
-        bool needPclose = false;
 
         if (is3mf) {
-            // unzip -p exits 0 even for missing internal files, so || chains don't work.
-            // Use unzip -l to find which plate file actually exists, then extract it.
             QByteArray q = "'" + path.toUtf8() + "'";
 
-            QByteArray thumbCmd =
-                "f=$(unzip -l " + q + " 2>/dev/null | grep -oE 'Metadata/plate_[0-9]+[.]png' | head -1);"
-                " if [ -n \"$f\" ]; then unzip -p " + q + " \"$f\" 2>/dev/null | base64;"
-                " else unzip -p " + q + " 'Auxiliaries/.thumbnails/thumbnail_middle.png' 2>/dev/null | base64; fi";
-            FILE *thumbFp = ::popen(thumbCmd.constData(), "r");
-            if (thumbFp) {
-                char tbuf[4096];
-                QString thumbnail;
-                while (fgets(tbuf, sizeof(tbuf), thumbFp)) {
-                    thumbnail += QString::fromUtf8(tbuf).trimmed();
-                }
-                pclose(thumbFp);
-                result["thumbnail"] = thumbnail;
-            }
-
+            // Find all plate gcode files
             QByteArray plateFindCmd =
-                "unzip -l " + q + " 2>/dev/null | grep -oE 'Metadata/plate_[0-9]+[.]gcode' | head -1";
+                "unzip -l " + q + " 2>/dev/null | grep -oE 'Metadata/plate_[0-9]+[.]gcode$'";
             FILE *plateFindFp = ::popen(plateFindCmd.constData(), "r");
-            QString platePath;
+            QMap<int, QString> platePathMap;
             if (plateFindFp) {
                 char pbuf[256] = {};
-                if (fgets(pbuf, sizeof(pbuf), plateFindFp))
-                    platePath = QString::fromUtf8(pbuf).trimmed();
+                while (fgets(pbuf, sizeof(pbuf), plateFindFp)) {
+                    QString line = QString::fromUtf8(pbuf).trimmed();
+                    if (line.isEmpty()) continue;
+                    int u = line.lastIndexOf('_'), d = line.lastIndexOf('.');
+                    int num = (u >= 0 && d > u) ? line.mid(u + 1, d - u - 1).toInt() : 0;
+                    if (num > 0) platePathMap[num] = line;
+                }
                 pclose(plateFindFp);
             }
-            result["platePath"] = platePath;
+            result["plateCount"] = platePathMap.size();
+            if (!platePathMap.isEmpty())
+                result["platePath"] = platePathMap.first();
 
-            if (!platePath.isEmpty()) {
-                QByteArray gcodeCmd = "unzip -p " + q + " '" + platePath.toUtf8() + "' 2>/dev/null";
-                fp = ::popen(gcodeCmd.constData(), "r");
-                needPclose = true;
+            // Model-only .3mf with no gcode plates
+            if (platePathMap.isEmpty()) {
+                QByteArray thumbCmd =
+                    "unzip -p " + q + " 'Auxiliaries/.thumbnails/thumbnail_middle.png' 2>/dev/null | base64";
+                FILE *tFp = ::popen(thumbCmd.constData(), "r");
+                if (tFp) {
+                    char tbuf[4096];
+                    QString thumb;
+                    while (fgets(tbuf, sizeof(tbuf), tFp)) thumb += QString::fromUtf8(tbuf).trimmed();
+                    pclose(tFp);
+                    result["thumbnail"] = thumb;
+                }
+                result["hasPrintableGcode"] = false;
+                return QJsonDocument(result).toJson(QJsonDocument::Compact);
             }
-        } else {
-            fp = fopen(path.toUtf8().constData(), "r");
+
+            // Parse each plate individually, in ascending plate-number order
+            QJsonArray platesArray;
+            bool anyGcode = false;
+            for (auto it = platePathMap.begin(); it != platePathMap.end(); ++it) {
+                int plateNum = it.key();
+                const QString &platePath = it.value();
+                QJsonObject plateResult;
+
+                // Per-plate thumbnail from Metadata/plate_N.png
+                QByteArray tCmd = "unzip -p " + q + " 'Metadata/plate_" + QByteArray::number(plateNum) + ".png' 2>/dev/null | base64";
+                FILE *tFp = ::popen(tCmd.constData(), "r");
+                if (tFp) {
+                    char tbuf[4096];
+                    QString thumb;
+                    while (fgets(tbuf, sizeof(tbuf), tFp)) thumb += QString::fromUtf8(tbuf).trimmed();
+                    pclose(tFp);
+                    plateResult["thumbnail"] = thumb;
+                }
+
+                // Per-plate gcode header: time, weight, filaments
+                QByteArray gcodeCmd = "unzip -p " + q + " '" + platePath.toUtf8() + "' 2>/dev/null";
+                FILE *gFp = ::popen(gcodeCmd.constData(), "r");
+                if (gFp) {
+                    QStringList filamentColors, filamentTypes, filamentUsage;
+                    QStringList plateFilamentSlots;
+                    bool inHeaderBlock = true;
+                    char buf[4096];
+                    int n = 0;
+                    while (n++ < 2000 && fgets(buf, sizeof(buf), gFp)) {
+                        anyGcode = true;
+                        size_t buflen = strlen(buf);
+                        bool lineDone = (buflen == 0 || buf[buflen-1] == '\n' || feof(gFp));
+                        QString line = QString::fromUtf8(buf).trimmed();
+                        if (!lineDone) {
+                            char tmp[4096];
+                            while (!lineDone && fgets(tmp, sizeof(tmp), gFp)) {
+                                size_t tlen = strlen(tmp);
+                                lineDone = (tlen == 0 || tmp[tlen-1] == '\n' || feof(gFp));
+                            }
+                        }
+                        if (!line.startsWith(";")) { if (!line.isEmpty()) break; continue; }
+                        if (line.contains("total estimated time:")) {
+                            int idx = line.indexOf("total estimated time:") + 21;
+                            int endIdx = line.indexOf(';', idx);
+                            QString tval = (endIdx >= 0 ? line.mid(idx, endIdx - idx) : line.mid(idx)).trimmed();
+                            int secs = parseTimeString(tval);
+                            if (secs > 0) plateResult["timeEstimate"] = secs;
+                            continue;
+                        }
+                        if (line.startsWith("; total filament weight [g]")) {
+                            int colon = line.lastIndexOf(':');
+                            if (colon >= 0) {
+                                QStringList parts = splitOn(line.mid(colon + 1).trimmed(), ',');
+                                double total = 0.0;
+                                for (int wi = 0; wi < parts.size(); wi++) total += parts[wi].trimmed().toDouble();
+                                if (total > 0.0) plateResult["weightEstimate"] = total;
+                            }
+                            continue;
+                        }
+                        if (inHeaderBlock) {
+                            if (line.startsWith("; HEADER_BLOCK_END")) {
+                                inHeaderBlock = false;
+                            } else if (line.startsWith("; filament:")) {
+                                int colon = line.indexOf(':');
+                                if (colon >= 0)
+                                    plateFilamentSlots = splitOn(line.mid(colon + 1).trimmed(), ',');
+                            }
+                            continue;
+                        }
+                        int eq = line.indexOf('=');
+                        if (eq < 0) continue;
+                        QString val = line.mid(eq + 1).trimmed();
+                        if (line.contains("estimated printing time") && line.contains("normal mode")) {
+                            plateResult["timeEstimate"] = parseTimeString(val);
+                        } else if (line.contains("filament used [g]")) {
+                            plateResult["weightEstimate"] = val.toDouble();
+                        } else if (line.startsWith("; filament_colour ") && !line.contains("_new") && !line.contains("_map") && filamentColors.isEmpty()) {
+                            filamentColors = splitOn(val, ';');
+                        } else if (line.startsWith("; filament_type ") && !line.contains("filament_type_full") && filamentTypes.isEmpty()) {
+                            filamentTypes = splitOn(val, ';');
+                        } else if ((line.contains("filament_used_mm3") || line.contains("filament used [mm3]")) && filamentUsage.isEmpty()) {
+                            filamentUsage = splitOn(val, ';');
+                        }
+                    }
+                    pclose(gFp);
+
+                    QJsonArray filaments;
+                    if (!plateFilamentSlots.isEmpty()) {
+                        for (int i = 0; i < plateFilamentSlots.size(); i++) {
+                            int slotIdx = plateFilamentSlots[i].trimmed().toInt() - 1;
+                            if (slotIdx < 0 || slotIdx >= filamentColors.size()) continue;
+                            QString color = filamentColors[slotIdx].trimmed();
+                            if (!color.startsWith('#')) color.prepend('#');
+                            QString type = slotIdx < filamentTypes.size() ? filamentTypes[slotIdx].trimmed() : QString("?");
+                            if (type.isEmpty()) type = "?";
+                            QJsonObject f;
+                            f["color"] = color;
+                            f["type"] = type;
+                            filaments.append(f);
+                        }
+                    } else {
+                        for (int i = 0; i < filamentColors.size(); i++) {
+                            if (!filamentUsage.isEmpty() && i < filamentUsage.size()
+                                    && filamentUsage[i].trimmed().toDouble() <= 0.0)
+                                continue;
+                            QString color = filamentColors[i].trimmed();
+                            if (!color.startsWith('#')) color.prepend('#');
+                            QString type = i < filamentTypes.size() ? filamentTypes[i].trimmed() : QString("?");
+                            if (type.isEmpty()) type = "?";
+                            QJsonObject f;
+                            f["color"] = color;
+                            f["type"] = type;
+                            filaments.append(f);
+                        }
+                    }
+                    if (!filaments.isEmpty()) plateResult["filaments"] = filaments;
+                }
+
+                platesArray.append(plateResult);
+            }
+
+            result["plates"] = platesArray;
+            result["hasPrintableGcode"] = anyGcode;
+
+            // Top-level fields from plate 1 for backward compat
+            if (!platesArray.isEmpty()) {
+                QJsonObject p0 = platesArray[0].toObject();
+                if (p0.contains("thumbnail"))      result["thumbnail"]      = p0["thumbnail"];
+                if (p0.contains("timeEstimate"))   result["timeEstimate"]   = p0["timeEstimate"];
+                if (p0.contains("weightEstimate")) result["weightEstimate"] = p0["weightEstimate"];
+                if (p0.contains("filaments"))      result["filaments"]      = p0["filaments"];
+            }
+
+            return QJsonDocument(result).toJson(QJsonDocument::Compact);
         }
 
+        // Non-3mf (.gcode) path
+        FILE *fp = fopen(path.toUtf8().constData(), "r");
         if (!fp)
             return QJsonDocument(result).toJson(QJsonDocument::Compact);
 
@@ -395,35 +529,33 @@ eject:
             }
             if (!line.startsWith(";")) { if (!line.isEmpty()) break; continue; }
 
-            if (!is3mf) {
-                if (line.startsWith("; thumbnail begin")) {
-                    // Parse "W x H" from "; thumbnail begin W x H" — avoid split()
-                    int px = 0;
-                    int spaceCount = 0, dimStart = -1;
-                    for (int i = 0; i < line.length(); i++) {
-                        if (line.at(i) == ' ') {
-                            spaceCount++;
-                            if (spaceCount == 3) dimStart = i + 1;
-                        }
+            if (line.startsWith("; thumbnail begin")) {
+                // Parse "W x H" from "; thumbnail begin W x H" — avoid split()
+                int px = 0;
+                int spaceCount = 0, dimStart = -1;
+                for (int i = 0; i < line.length(); i++) {
+                    if (line.at(i) == ' ') {
+                        spaceCount++;
+                        if (spaceCount == 3) dimStart = i + 1;
                     }
-                    if (dimStart >= 0) {
-                        QString dim = line.mid(dimStart);
-                        int x = dim.indexOf('x');
-                        if (x > 0) px = dim.left(x).trimmed().toInt() * dim.mid(x + 1).trimmed().toInt();
-                    }
-                    inThumbnail = (px > bestPixels);
-                    if (inThumbnail) { currentThumbnail.clear(); currentPixels = px; }
-                    continue;
                 }
-                if (line.startsWith("; thumbnail end")) {
-                    if (inThumbnail) { bestThumbnail = currentThumbnail; bestPixels = currentPixels; }
-                    inThumbnail = false;
-                    continue;
+                if (dimStart >= 0) {
+                    QString dim = line.mid(dimStart);
+                    int x = dim.indexOf('x');
+                    if (x > 0) px = dim.left(x).trimmed().toInt() * dim.mid(x + 1).trimmed().toInt();
                 }
-                if (inThumbnail) {
-                    if (line.size() > 2) currentThumbnail += line.mid(2);
-                    continue;
-                }
+                inThumbnail = (px > bestPixels);
+                if (inThumbnail) { currentThumbnail.clear(); currentPixels = px; }
+                continue;
+            }
+            if (line.startsWith("; thumbnail end")) {
+                if (inThumbnail) { bestThumbnail = currentThumbnail; bestPixels = currentPixels; }
+                inThumbnail = false;
+                continue;
+            }
+            if (inThumbnail) {
+                if (line.size() > 2) currentThumbnail += line.mid(2);
+                continue;
             }
 
             // BambuStudio header: "; model printing time: Xh Ym Zs; total estimated time: Xh Ym Zs"
@@ -436,10 +568,15 @@ eject:
                 continue;
             }
 
-            // BambuStudio header: "; total filament weight [g] : 65.17"
+            // BambuStudio header: "; total filament weight [g] : 65.17" (may be comma-separated per filament)
             if (line.startsWith("; total filament weight [g]")) {
                 int colon = line.lastIndexOf(':');
-                if (colon >= 0) result["weightEstimate"] = line.mid(colon + 1).trimmed().toDouble();
+                if (colon >= 0) {
+                    QStringList parts = splitOn(line.mid(colon + 1).trimmed(), ',');
+                    double total = 0.0;
+                    for (int wi = 0; wi < parts.size(); wi++) total += parts[wi].trimmed().toDouble();
+                    if (total > 0.0) result["weightEstimate"] = total;
+                }
                 continue;
             }
 
@@ -460,9 +597,9 @@ eject:
             }
         }
 
-        if (needPclose) pclose(fp); else fclose(fp);
-        if (!is3mf) result["thumbnail"] = bestThumbnail;
-        result["hasPrintableGcode"] = !is3mf || foundGcodeContent;
+        fclose(fp);
+        result["thumbnail"] = bestThumbnail;
+        result["hasPrintableGcode"] = foundGcodeContent;
 
         QJsonArray filaments;
         for (int i = 0; i < filamentColors.size(); i++) {

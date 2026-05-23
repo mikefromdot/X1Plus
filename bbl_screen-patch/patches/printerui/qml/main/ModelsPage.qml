@@ -68,6 +68,21 @@ BaseTabPage {
     property bool usbBedLeveling: true
     property bool usbFlowCali: true
     property bool usbTimelapse: false
+    property int usbSelectedPlate: 1
+    property var usbCurrentPlateData: {
+        if (!usbSelectedMeta) return null;
+        var plates = usbSelectedMeta.plates;
+        if (!plates || plates.length === 0) return usbSelectedMeta;
+        var idx = usbSelectedPlate - 1;
+        return (idx >= 0 && idx < plates.length) ? plates[idx] : usbSelectedMeta;
+    }
+    onUsbSelectedPlateChanged: {
+        if (!usbSelectedMeta) return;
+        var plates = usbSelectedMeta.plates;
+        var plate = (plates && usbSelectedPlate >= 1 && usbSelectedPlate <= plates.length)
+                    ? plates[usbSelectedPlate - 1] : usbSelectedMeta;
+        usbSelectedTrays = usbAutoAssignTrays(plate);
+    }
 
     function usbTrayLabel(idx) {
         return ["A","B","C","D"][Math.floor(idx / 4)] + (idx % 4 + 1);
@@ -409,6 +424,7 @@ BaseTabPage {
                                 usbSelectedPath = path;
                                 usbSelectedMeta = usbGetMeta(path);
                                 usbSelectedTrays = usbAutoAssignTrays(usbSelectedMeta);
+                                usbSelectedPlate = 1;
                                 usbPickerOpen = false;
                             }
                         }
@@ -431,33 +447,76 @@ BaseTabPage {
         Item {
             id: usbPrintConfirm
             anchors.fill: parent
-            anchors.margins: 16
             visible: usbSelectedPath !== ""
 
             MarginPanel {
                 id: confirmPoster
-                width: 500
+                width: 680
                 anchors.left: parent.left
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
+                leftMargin: 24
+                topMargin: 20
+                bottomMargin: 20
 
                 color: Colors.gray_600
 
                 Image {
                     anchors.fill: parent
-                    visible: usbSelectedMeta !== null && usbSelectedMeta.thumbnail && usbSelectedMeta.thumbnail.length > 0
-                    source: (usbSelectedMeta !== null && usbSelectedMeta.thumbnail && usbSelectedMeta.thumbnail.length > 0)
-                        ? "data:image/png;base64," + usbSelectedMeta.thumbnail : ""
+                    visible: usbCurrentPlateData !== null && usbCurrentPlateData.thumbnail && usbCurrentPlateData.thumbnail.length > 0
+                    source: (usbCurrentPlateData !== null && usbCurrentPlateData.thumbnail && usbCurrentPlateData.thumbnail.length > 0)
+                        ? "data:image/png;base64," + usbCurrentPlateData.thumbnail : ""
                     fillMode: Image.PreserveAspectFit
                     cache: false
                 }
 
                 Text {
                     anchors.centerIn: parent
-                    visible: usbSelectedMeta === null || !usbSelectedMeta.thumbnail || usbSelectedMeta.thumbnail.length === 0
+                    visible: usbCurrentPlateData === null || !usbCurrentPlateData.thumbnail || usbCurrentPlateData.thumbnail.length === 0
                     font.pixelSize: 100
                     color: Colors.gray_400
                     text: "≡"
+                }
+
+                // ── plate counter (top-right) ────────────────────────────
+                Text {
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.topMargin: 10
+                    anchors.rightMargin: 10
+                    color: Colors.gray_500
+                    font: Fonts.body_24
+                    visible: usbSelectedMeta !== null && (usbSelectedMeta.plateCount || 1) > 1
+                    text: usbSelectedPlate + " / " + (usbSelectedMeta ? (usbSelectedMeta.plateCount || 1) : 1)
+                }
+
+                // ── prev/next plate buttons overlaid on poster ───────────
+                ZButton {
+                    visible: usbSelectedMeta !== null && (usbSelectedMeta.plateCount || 1) > 1
+                    x: 32
+                    height: width
+                    anchors.verticalCenter: parent.verticalCenter
+                    type: ZButtonAppearance.Secondary
+                    iconSize: 0
+                    cornerRadius: width / 2
+                    rotation: -90
+                    icon: "../../icon/up.svg"
+                    enabled: usbSelectedPlate > 1
+                    onClicked: usbSelectedPlate--
+                }
+                ZButton {
+                    visible: usbSelectedMeta !== null && (usbSelectedMeta.plateCount || 1) > 1
+                    height: width
+                    anchors.right: parent.right
+                    anchors.rightMargin: 32
+                    anchors.verticalCenter: parent.verticalCenter
+                    type: ZButtonAppearance.Secondary
+                    iconSize: 0
+                    cornerRadius: width / 2
+                    rotation: 90
+                    icon: "../../icon/up.svg"
+                    enabled: usbSelectedPlate < (usbSelectedMeta ? (usbSelectedMeta.plateCount || 1) : 1)
+                    onClicked: usbSelectedPlate++
                 }
 
                 Shape {
@@ -514,10 +573,10 @@ BaseTabPage {
                         boundsBehavior: ListView.StopAtBounds
                         model: {
                             var items = [];
-                            if (usbSelectedMeta && usbSelectedMeta.timeEstimate > 0)
-                                items.push({ key: "time",   value: Printer.durationString(usbSelectedMeta.timeEstimate) });
-                            if (usbSelectedMeta && usbSelectedMeta.weightEstimate > 0)
-                                items.push({ key: "weight", value: usbSelectedMeta.weightEstimate.toFixed(1) + qsTr("g") });
+                            if (usbCurrentPlateData && usbCurrentPlateData.timeEstimate > 0)
+                                items.push({ key: "time",   value: Printer.durationString(usbCurrentPlateData.timeEstimate) });
+                            if (usbCurrentPlateData && usbCurrentPlateData.weightEstimate > 0)
+                                items.push({ key: "weight", value: usbCurrentPlateData.weightEstimate.toFixed(1) + qsTr("g") });
                             return items;
                         }
                         delegate: Item {
@@ -553,8 +612,8 @@ BaseTabPage {
                 anchors.bottom: parent.bottom
                 leftMargin: 23
                 rightMargin: 21
-                topMargin: 20
-                bottomMargin: 20
+                topMargin: confirmPoster.topMargin
+                bottomMargin: confirmPoster.bottomMargin
                 color: Colors.gray_800
 
                 // ── not-printable message ────────────────────────────────
@@ -609,8 +668,8 @@ BaseTabPage {
                         spacing: 8
 
                         Repeater {
-                            model: (usbSelectedMeta && usbSelectedMeta.filaments)
-                                   ? usbSelectedMeta.filaments : []
+                            model: (usbCurrentPlateData && usbCurrentPlateData.filaments)
+                                   ? usbCurrentPlateData.filaments : []
 
                             delegate: Item {
                                 id: swatchItem
@@ -733,7 +792,7 @@ BaseTabPage {
                             height: GridView.view.cellHeight - 8
                             property bool compatible: {
                                 if (!td.exist) return false;
-                                var filaments = usbSelectedMeta ? usbSelectedMeta.filaments : null;
+                                var filaments = usbCurrentPlateData ? usbCurrentPlateData.filaments : null;
                                 if (!filaments || usbPickerFilamentIdx >= filaments.length) return true;
                                 return usbTypeMatches(td.typeName + "",
                                                       filaments[usbPickerFilamentIdx].type || "?");
@@ -867,47 +926,44 @@ BaseTabPage {
                         usbSelectedPath = "";
                         usbSelectedMeta = null;
                         var is3mf = path.slice(-4).toLowerCase() === ".3mf";
-                        if (is3mf) {
-                            X1Plus.DDS.publish("device/request/print", {
-                                command: "project_file",
-                                param: meta.platePath,
-                                url: "file://" + path,
-                                project_id: "0",
-                                profile_id: "0",
-                                task_id: "0",
-                                subtask_id: "0",
-                                subtask_name: "",
-                                md5: "",
-                                timelapse: usbTimelapse,
-                                bed_type: "auto",
-                                bed_levelling: usbBedLeveling,
-                                flow_cali: usbFlowCali,
-                                vibration_cali: true,
-                                layer_inspect: true,
-                                ams_mapping: (function() {
-                                    if (!usbUseAms || usbSelectedTrays.length === 0) return [];
-                                    var anyAssigned = false;
-                                    for (var i = 0; i < usbSelectedTrays.length; i++)
-                                        if (usbSelectedTrays[i]) { anyAssigned = true; break; }
-                                    if (!anyAssigned) return [];
-                                    return usbSelectedTrays.map(function(t) {
-                                        return t ? t.index : 0;
-                                    });
-                                })(),
-                                use_ams: usbUseAms,
-                                sequence_id: "0"
-                            });
-                        } else {
-                            X1Plus.DDS.publish("device/request/print", {
-                                command: "gcode_file",
-                                param: path,
-                                sequence_id: 0,
-                                use_ams: usbUseAms,
-                                bed_leveling: usbBedLeveling,
-                                flow_cali: usbFlowCali,
-                                timelapse: usbTimelapse
-                            });
-                        }
+                        var amsMapping = (function() {
+                            if (!usbUseAms || usbSelectedTrays.length === 0) return [];
+                            var anyAssigned = false;
+                            for (var i = 0; i < usbSelectedTrays.length; i++)
+                                if (usbSelectedTrays[i]) { anyAssigned = true; break; }
+                            if (!anyAssigned) return [];
+                            return usbSelectedTrays.map(function(t) { return t ? t.index : 0; });
+                        })();
+                        var printPayload = is3mf ? {
+                            command: "project_file",
+                            param: "Metadata/plate_" + usbSelectedPlate + ".gcode",
+                            url: "file://" + path,
+                            project_id: "0",
+                            profile_id: "0",
+                            task_id: "0",
+                            subtask_id: "0",
+                            subtask_name: "",
+                            md5: "",
+                            timelapse: usbTimelapse,
+                            bed_type: "auto",
+                            bed_levelling: usbBedLeveling,
+                            flow_cali: usbFlowCali,
+                            vibration_cali: true,
+                            layer_inspect: true,
+                            ams_mapping: amsMapping,
+                            use_ams: usbUseAms,
+                            sequence_id: "0"
+                        } : {
+                            command: "gcode_file",
+                            param: path,
+                            sequence_id: 0,
+                            use_ams: usbUseAms,
+                            bed_leveling: usbBedLeveling,
+                            flow_cali: usbFlowCali,
+                            timelapse: usbTimelapse
+                        };
+                        X1Plus.lastUsbPrint = { payload: printPayload };
+                        X1Plus.DDS.publish("device/request/print", printPayload);
                         navigator.activePage = "Home";
                     }
                 }
