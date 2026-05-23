@@ -128,7 +128,9 @@ BaseTabPage {
         usbSelectedMeta = null;
         try {
             usbEntries = JSON.parse(X1PlusNative.listDir(path)).filter(function(e) {
-                return e.name.charAt(0) !== '.' && e.name !== "System Volume Information";
+                if (e.name.charAt(0) === '.' || e.isDir) return false;
+                var lower = e.name.toLowerCase();
+                return lower.endsWith('.gcode.3mf');
             });
         } catch(e) {
             usbEntries = [];
@@ -922,7 +924,6 @@ BaseTabPage {
                     text: qsTr("Print now")
                     onClicked: {
                         var path = usbSelectedPath;
-                        var meta = usbSelectedMeta;
                         usbSelectedPath = "";
                         usbSelectedMeta = null;
                         var is3mf = path.slice(-4).toLowerCase() === ".3mf";

@@ -346,8 +346,6 @@ eject:
                 pclose(plateFindFp);
             }
             result["plateCount"] = platePathMap.size();
-            if (!platePathMap.isEmpty())
-                result["platePath"] = platePathMap.first();
 
             // Model-only .3mf with no gcode plates
             if (platePathMap.isEmpty()) {
