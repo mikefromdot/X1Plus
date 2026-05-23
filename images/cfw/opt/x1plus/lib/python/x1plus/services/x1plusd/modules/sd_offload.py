@@ -29,7 +29,6 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 USB_MOUNT      = "/media/usb0"
-OFFLOAD_BASE   = ".sdoffload"
 POLL_INTERVAL  = 15
 
 OFFLOAD_DIRS = [
@@ -67,7 +66,7 @@ def _usb_present():
 
 
 def _mount_dir(sdcard_path):
-    usb_path = os.path.join(USB_MOUNT, OFFLOAD_BASE, os.path.basename(sdcard_path))
+    usb_path = os.path.join(USB_MOUNT, os.path.basename(sdcard_path))
     try:
         os.makedirs(usb_path, exist_ok=True)
         os.makedirs(sdcard_path, exist_ok=True)
