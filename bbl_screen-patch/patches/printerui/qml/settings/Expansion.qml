@@ -216,7 +216,7 @@ Item {
         if (!dev.path)
             return qsTr("Not connected");
         if (dev.driver == "usb-storage") {
-            if (usb.mounts.some(m => m.usb == port)) {
+            if (usb.mounts.some(m => m.usb_port == port)) {
                 return qsTr("Used as storage media");
             }
             return qsTr("Storage media (not mounted)");
@@ -227,7 +227,7 @@ Item {
     function usb_action(port) {
         var dev = usb.devices[port];
 
-        if (dev.driver == "usb-storage" && usb.mounts.some(m => m.usb == port)) {
+        if (dev.driver == "usb-storage" && usb.mounts.some(m => m.usb_port == port)) {
             dialogStack.push("qrc:/printerui/qml/Dialog.qml", {
                 url: "file:///opt/x1plus/share/qml/UsbStorageDialog.qml",
                 args: { port: port }
@@ -238,7 +238,7 @@ Item {
     function usb_has_action(port) {
         var dev = usb.devices[port];
 
-        if (dev.driver == "usb-storage" && usb.mounts.some(m => m.usb == port)) {
+        if (dev.driver == "usb-storage" && usb.mounts.some(m => m.usb_port == port)) {
             return true;
         }
         

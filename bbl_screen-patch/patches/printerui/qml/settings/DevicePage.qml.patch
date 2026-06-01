@@ -377,7 +377,7 @@
 +                        anchors.topMargin: 15
 +                        font: Fonts.body_26
 +                        color: Colors.gray_200
-+                        text: "USB port " + modelData.usb
++                        text: "USB port " + modelData.usb_port
 +                    }
 +                    Text {
 +                        anchors.right: parent.right
