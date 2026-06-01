@@ -184,7 +184,7 @@ class ExpansionManager(X1PlusDBusService):
             if usb != self._usb:
                 self._usb = usb
                 logger.info(f"USB status changed: {usb}")
-                await self.emit_signal("UsbChanged", mounts)
+                await self.emit_signal("UsbChanged", usb)
             
             await asyncio.sleep(USB_POLL_INTERVAL)
 
