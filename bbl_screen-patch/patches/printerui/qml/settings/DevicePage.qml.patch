@@ -1,6 +1,6 @@
 --- printer_ui-orig/printerui/qml/settings/DevicePage.qml
 +++ printer_ui/printerui/qml/settings/DevicePage.qml
-@@ -3,14 +3,98 @@
+@@ -3,14 +3,49 @@
  import QtQml 2.12
  import UIBase 1.0
  import Printer 1.0
@@ -18,56 +18,7 @@
 +    property var isShield: DeviceManager.getSetting("cfw_shield", false)
 +    property bool legacyWifiDriver: X1Plus.Settings.get("boot.wifi_driver.bcmdhd", false)
 +    property bool wifiPendingReboot: false
-+    property var usbInfo: []
-+    property var usbKnownPaths: []
-+
-+    function refreshUsbInfo() {
-+        var mounts = X1PlusNative.popen("grep /media/usb /proc/mounts | cut -d' ' -f2").trim();
-+        var mountedPaths = mounts.length > 0 ? mounts.split("\n").filter(function(s) { return s.trim().length > 0; }) : [];
-+
-+        // Add any newly seen paths to the known list
-+        var changed = false;
-+        for (var i = 0; i < mountedPaths.length; i++) {
-+            if (usbKnownPaths.indexOf(mountedPaths[i]) < 0) {
-+                var newPaths = usbKnownPaths.slice();
-+                newPaths.push(mountedPaths[i]);
-+                newPaths.sort();
-+                usbKnownPaths = newPaths;
-+                changed = true;
-+            }
-+        }
-+
-+        if (usbKnownPaths.length === 0) {
-+            usbInfo = [];
-+            return;
-+        }
-+
-+        var result = [];
-+        for (var j = 0; j < usbKnownPaths.length; j++) {
-+            var path = usbKnownPaths[j];
-+            var connected = mountedPaths.indexOf(path) >= 0;
-+            if (connected) {
-+                var df = X1PlusNative.popen("df -k '" + path + "' 2>/dev/null | awk 'NR==2{print $2,$3}'").trim();
-+                var parts = df.split(" ");
-+                if (parts.length >= 2) {
-+                    var total = parseInt(parts[0]) / (1024 * 1024);
-+                    var used = parseInt(parts[1]) / (1024 * 1024);
-+                    result.push({ name: "USB " + (j + 1), used: used, total: total, connected: true });
-+                }
-+            } else {
-+                result.push({ name: "USB " + (j + 1), used: 0, total: 1, connected: false });
-+            }
-+        }
-+        usbInfo = result;
-+    }
-+
-+    Timer {
-+        id: usbInfoTimer
-+        interval: 5000
-+        running: true
-+        repeat: true
-+        onTriggered: refreshUsbInfo()
-+    }
++    property var usbMounts: X1Plus.Expansion.usb().mounts
 +
 +    function setShield(shield) {
 +        isShield = shield;
@@ -99,7 +50,7 @@
  
      onVisibleChanged: {
          DeviceManager.activeDeviceInfos(DeviceManager.DI_Storage, visible)
-@@ -22,6 +106,7 @@
+@@ -22,6 +57,7 @@
  
      property var infoItems: SimpleItemModel {
          DeviceInfoItem { title: qsTr("Device"); value: build.name
@@ -107,7 +58,7 @@
          }
          DeviceInfoItem { title: qsTr("Language"); value: DeviceManager.languageTitle
              function onClicked() {
-@@ -31,8 +116,8 @@
+@@ -31,8 +67,8 @@
                  choisePad.choiseCallback = function(c) { DeviceManager.languageTitle = c }
                  choisePad.popupFor()
              } }
@@ -118,7 +69,7 @@
              property var onClicked: triggerVersion
          }
          DeviceInfoItem { title: qsTr("Video"); value: models[number]
-@@ -56,79 +141,133 @@
+@@ -56,79 +92,133 @@
                  }
                  choisePad.popupFor()
              } }
@@ -156,6 +107,12 @@
 +        
 +        DeviceInfoItem { title: qsTr("WiFi driver"); value: ((legacyWifiDriver) ? qsTr("Legacy") : qsTr("X1Plus")) + (wifiPendingReboot ? qsTr(" (reboot needed)") : "")
 +            function onClicked() { toggleWifiDriver() }
++        }
++        
++        DeviceInfoItem {
++            title: qsTr("MC firmware version");
++            value: X1Plus.Settings.get("mc.use_legacy_fw", false) ? qsTr("Legacy") : qsTr("X1Plus")
++            function onClicked() { toggleMcFirmware() }
          }
 -//        DeviceInfoItem { title: qsTr("Certification"); value: ""
 -//            function onClicked() { certPanel.visible = true }
@@ -164,12 +121,6 @@
 -            property var onClicked: exportLog }
 -        DeviceInfoItem { title: qsTr("Restore Factory Settings"); value: ""
 -            property var onClicked: restoreFactorySettings }
-+        
-+        DeviceInfoItem {
-+            title: qsTr("MC firmware version");
-+            value: X1Plus.Settings.get("mc.use_legacy_fw", false) ? qsTr("Legacy") : qsTr("X1Plus")
-+            function onClicked() { toggleMcFirmware() }
-+        }
 +            
      }
  
@@ -312,7 +263,7 @@
          var export_ = function(index) {
  //            if (!DeviceManager.exportSystemLog())
  //                return
-@@ -173,81 +312,179 @@
+@@ -173,81 +263,180 @@
                                          onYes: restore
                                      })
          }
@@ -332,6 +283,7 @@
 +        anchors.left: parent.left
 +        leftMargin: 10
 +        bottomMargin: 10
++        
  
          MarginPanel {
 -            id: sdIdStorage
@@ -348,7 +300,7 @@
 -            rightRadiusOff: true
 -            color: Colors.gray_700
 +            color: Colors.gray_600
-+            height: 32 + 80 + usbInfo.length * 81
++            height: 32 + 80 + usbMounts.length * 81
  
 -            ZText {
 -                id: sdName
@@ -403,11 +355,13 @@
 +
 +            // USB drive rows
 +            Repeater {
-+                model: usbInfo
++                model: usbMounts
 +                delegate: Item {
 +                    width: storagePanel.width
 +                    height: 81
-+                    y: 80 + index * 81
++                    y: 95 + index * 81
++                    
++                    // XXX: on tap: launch usbstoragepanel
 +
 +                    Rectangle {
 +                        width: parent.width - 32
@@ -423,7 +377,7 @@
 +                        anchors.topMargin: 15
 +                        font: Fonts.body_26
 +                        color: Colors.gray_200
-+                        text: modelData.name
++                        text: "USB port " + modelData.usb
 +                    }
 +                    Text {
 +                        anchors.right: parent.right
@@ -432,9 +386,7 @@
 +                        anchors.topMargin: 15
 +                        font: Fonts.body_24
 +                        color: Colors.font2
-+                        text: modelData.connected
-+                            ? modelData.used.toFixed(1) + "G/" + modelData.total.toFixed(1) + "G"
-+                            : qsTr("Not connected")
++                        text: (modelData.disk_used / (1024*1024*1024)).toFixed(1) + "G/" + (modelData.disk_size / (1024*1024*1024)).toFixed(1) + "G"
 +                    }
 +                    ZProgressBar {
 +                        width: storagePanel.width - 32
@@ -444,7 +396,7 @@
 +                        anchors.topMargin: 57
 +                        backgroundColor: StateColors.get("gray_500")
 +                        progressColor: Colors.brand
-+                        value: modelData.connected ? modelData.used / modelData.total : 0
++                        value: modelData.disk_used / modelData.disk_size
 +                    }
 +                }
 +            }
@@ -537,7 +489,7 @@
                  }
              }
          }
-@@ -255,10 +492,10 @@
+@@ -255,10 +444,10 @@
          MarginPanel {
              id: lanOnly
              width: 426
@@ -551,7 +503,7 @@
              color: Colors.gray_600
              radius: 15
              marginColor: "transparent"
-@@ -266,30 +503,45 @@
+@@ -266,30 +455,45 @@
              Text {
                  id: lanOnlyText
                  anchors.top: parent.top
@@ -611,7 +563,7 @@
                                              if (!RecordManager.rtspServerOn) {
                                                  dialogStack.popupDialog(
                                                              "TextConfirm", {
-@@ -297,103 +549,48 @@
+@@ -297,103 +501,48 @@
                                                                  text: qsTr("Do you need to open LAN Mode Liveview?"),
                                                                  defaultButton: 0,
                                                                  onYes: function() {
@@ -741,7 +693,7 @@
              }
          }
      }
-@@ -404,7 +601,9 @@
+@@ -404,7 +553,9 @@
          anchors.right: parent.right
          anchors.top: parent.top
          anchors.bottom: parent.bottom
@@ -752,7 +704,7 @@
          radius: 15
          color: Colors.gray_600
  
-@@ -418,6 +617,8 @@
+@@ -418,6 +569,8 @@
              delegate: infoComp
          }
  
@@ -761,7 +713,7 @@
          SimplePager {
              visible: infoList
              anchors.right: parent.right
-@@ -428,6 +629,7 @@
+@@ -428,6 +581,7 @@
              btnType: ZButtonAppearance.Secondary
              onStepTo: infoList.contentY = position
          }
@@ -769,7 +721,7 @@
      }
  
      PopupPad {
-@@ -581,6 +783,114 @@
+@@ -581,6 +735,114 @@
  
      }
  
@@ -884,7 +836,7 @@
      function setResolution(res)
      {
          if(res === RecordManager.resolution)
-@@ -607,4 +917,41 @@
+@@ -607,4 +869,41 @@
              }
          }
      }

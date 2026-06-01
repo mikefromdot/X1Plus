@@ -15,17 +15,7 @@ import "../printer"
 Item {
     id: top
     
-    property var usbDrives: []
-
-    Timer {
-        interval: 5000
-        running: true
-        repeat: true
-        onTriggered: top.usbDrives = X1Plus.usbDrives()
-    }
-
     Component.onCompleted: {
-        top.usbDrives = X1Plus.usbDrives();
         if (X1Plus.Expansion.hardware().expansion_revision < "X1P-002-C00") {
             dialogStack.popupDialog("TextConfirm", {
                 name: "Vintage Expander",
@@ -219,6 +209,41 @@ Item {
             return true;
         return (port_stat.module_detected != (port_stat.config.meta && port_stat.config.meta.module_config || ""));
     }
+    
+    property var usb: X1Plus.Expansion.usb()
+    function mk_usb_text(port) {
+        var dev = usb.devices[port];
+        if (!dev.path)
+            return qsTr("Not connected");
+        if (dev.driver == "usb-storage") {
+            if (usb.mounts.some(m => m.usb == port)) {
+                return qsTr("Used as storage media");
+            }
+            return qsTr("Storage media (not mounted)");
+        }
+        return qsTr("Unknown (%1:%2 %3)").arg(dev.vendor_id).arg(dev.product_id).arg(dev.driver);
+    }
+    
+    function usb_action(port) {
+        var dev = usb.devices[port];
+
+        if (dev.driver == "usb-storage" && usb.mounts.some(m => m.usb == port)) {
+            dialogStack.push("qrc:/printerui/qml/Dialog.qml", {
+                url: "file:///opt/x1plus/share/qml/UsbStorageDialog.qml",
+                args: { port: port }
+            });
+        }
+    }
+    
+    function usb_has_action(port) {
+        var dev = usb.devices[port];
+
+        if (dev.driver == "usb-storage" && usb.mounts.some(m => m.usb == port)) {
+            return true;
+        }
+        
+        return false;
+    }
 
     property var configItems: SimpleItemModel {
         DeviceInfoItem { title: qsTr("Expander hardware"); value: X1Plus.Expansion.productName()
@@ -264,26 +289,11 @@ Item {
                 }
         }
         
-        DeviceInfoItem {
-            title: qsTr("USB Storage")
-            value: usbDrives.length === 1
-                ? qsTr("1 drive connected")
-                : qsTr("%1 drives connected").arg(usbDrives.length)
-            hidden: usbDrives.length === 0
-            function onClicked() {
-                dialogStack.push("qrc:/printerui/qml/Dialog.qml", {
-                    url: "file:///opt/x1plus/share/qml/UsbStorageDialog.qml",
-                    args: { driveInfo: X1Plus.usbDriveInfo() }
-                });
-            }
-        }
+        DeviceInfoItem { title: qsTr("USB port A"); value: mk_usb_text("A"); property var onClicked: usb_has_action("A") ? (() => usb_action("A")) : undefined; }
+        DeviceInfoItem { title: qsTr("USB port B"); value: mk_usb_text("B"); property var onClicked: usb_has_action("B") ? (() => usb_action("B")) : undefined; }
+
         // there must always be at least one unhidden item at the bottom to
         // keep the line splitter looking right
-        DeviceInfoItem {
-            title: qsTr("USB Storage")
-            value: qsTr("No drives connected")
-            hidden: usbDrives.length > 0
-        }
     }
     
     
