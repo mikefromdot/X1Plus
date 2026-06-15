@@ -263,7 +263,7 @@
          var export_ = function(index) {
  //            if (!DeviceManager.exportSystemLog())
  //                return
-@@ -173,81 +263,180 @@
+@@ -173,81 +263,189 @@
                                          onYes: restore
                                      })
          }
@@ -398,6 +398,15 @@
 +                        progressColor: Colors.brand
 +                        value: modelData.disk_used / modelData.disk_size
 +                    }
++                    
++                    TapHandler {
++                        onTapped: {
++                            dialogStack.push("qrc:/printerui/qml/Dialog.qml", {
++                                url: "file:///opt/x1plus/share/qml/UsbStorageDialog.qml",
++                                args: { port: modelData.usb_port }
++                            });
++                        }
++                    }
 +                }
 +            }
          }
@@ -417,11 +426,21 @@
 +            anchors.left: storagePanel.left
 +            color: Colors.gray_600
 +            radius: 15
-+            marginColor: "transparent"
+             marginColor: "transparent"
+-            leftRadiusOff: true
+-            color: formatBtn.color
 +            visible: false
-+
+ 
+-            ZButton {
+-                id: formatBtn
 +            Loader {
-+                anchors.fill: parent
+                 anchors.fill: parent
+-                type: ZButtonAppearance.Tertiary
+-                backgroundColor: StateColors.get("gray_600_pressed")
+-                textColor: StateColors.get("gray_300")
+-                text: qsTr("Format")
+-                onClicked: {
+-                    formatStorage()
 +                property var text1: [qsTr("Video"), qsTr("Resolution"), "720p", "1080p"]
 +                property var check: RecordManager.isVideoOn
 +                property var check2: RecordManager.resolution == "720p"
@@ -453,21 +472,11 @@
 +            anchors.left: storagePanel.left
 +            color: Colors.gray_600
 +            radius: 15
-             marginColor: "transparent"
--            leftRadiusOff: true
--            color: formatBtn.color
++            marginColor: "transparent"
 +            visible: false
- 
--            ZButton {
--                id: formatBtn
++
 +            Loader {
-                 anchors.fill: parent
--                type: ZButtonAppearance.Tertiary
--                backgroundColor: StateColors.get("gray_600_pressed")
--                textColor: StateColors.get("gray_300")
--                text: qsTr("Format")
--                onClicked: {
--                    formatStorage()
++                anchors.fill: parent
 +                property var text1: [qsTr("Timelapse"), qsTr("Resolution"), "720p", "1080p"]
 +                property var check: RecordManager.isTimelapseOn
 +                property var check2: RecordManager.resolution == "720p"
@@ -489,7 +498,7 @@
                  }
              }
          }
-@@ -255,10 +444,10 @@
+@@ -255,10 +453,10 @@
          MarginPanel {
              id: lanOnly
              width: 426
@@ -503,7 +512,7 @@
              color: Colors.gray_600
              radius: 15
              marginColor: "transparent"
-@@ -266,30 +455,45 @@
+@@ -266,30 +464,45 @@
              Text {
                  id: lanOnlyText
                  anchors.top: parent.top
@@ -563,7 +572,7 @@
                                              if (!RecordManager.rtspServerOn) {
                                                  dialogStack.popupDialog(
                                                              "TextConfirm", {
-@@ -297,103 +501,48 @@
+@@ -297,103 +510,48 @@
                                                                  text: qsTr("Do you need to open LAN Mode Liveview?"),
                                                                  defaultButton: 0,
                                                                  onYes: function() {
@@ -693,7 +702,7 @@
              }
          }
      }
-@@ -404,7 +553,9 @@
+@@ -404,7 +562,9 @@
          anchors.right: parent.right
          anchors.top: parent.top
          anchors.bottom: parent.bottom
@@ -704,7 +713,7 @@
          radius: 15
          color: Colors.gray_600
  
-@@ -418,6 +569,8 @@
+@@ -418,6 +578,8 @@
              delegate: infoComp
          }
  
@@ -713,7 +722,7 @@
          SimplePager {
              visible: infoList
              anchors.right: parent.right
-@@ -428,6 +581,7 @@
+@@ -428,6 +590,7 @@
              btnType: ZButtonAppearance.Secondary
              onStepTo: infoList.contentY = position
          }
@@ -721,7 +730,7 @@
      }
  
      PopupPad {
-@@ -581,6 +735,114 @@
+@@ -581,6 +744,114 @@
  
      }
  
@@ -836,7 +845,7 @@
      function setResolution(res)
      {
          if(res === RecordManager.resolution)
-@@ -607,4 +869,41 @@
+@@ -607,4 +878,41 @@
              }
          }
      }
