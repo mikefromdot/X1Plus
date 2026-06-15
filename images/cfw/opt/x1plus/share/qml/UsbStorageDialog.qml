@@ -9,9 +9,11 @@ import "qrc:/printerui/qml/X1Plus.js" as X1Plus
 
 Item {
     property alias name: textConfirm.objectName
-    property var driveInfo: []
-    property int selectedDriveIndex: 0
-    property var currentPath: driveInfo.length > selectedDriveIndex ? driveInfo[selectedDriveIndex].path : ""
+    property var usb: X1Plus.Expansion.usb()
+
+    property var port: "" /* passed in from above */
+    property int selectedDriveIndex: usb.mounts.findIndex(m => m.usb_port == port) /* gets overridden later */
+    property var currentPath: (selectedDriveIndex >= 0 && usb.mounts.length > selectedDriveIndex) ? usb.mounts[selectedDriveIndex].mount_point : ""
     property var entries: []
     property var selectedEntry: null
     property var copyStatus: ""
@@ -39,8 +41,7 @@ Item {
         running: true
         repeat: true
         onTriggered: {
-            driveInfo = X1Plus.usbDriveInfo();
-            if (selectedDriveIndex >= driveInfo.length) {
+            if (selectedDriveIndex >= usb.mounts.length) {
                 selectedDriveIndex = 0;
             }
             refreshEntries();
@@ -111,9 +112,9 @@ Item {
         }
 
         Item {
-            visible: driveInfo.length > 1
+            visible: usb.mounts.length > 1
             width: parent.width
-            height: driveInfo.length > 1 ? 48 : 0
+            height: usb.mounts.length > 1 ? 48 : 0
 
             Row {
                 anchors.fill: parent
@@ -121,9 +122,9 @@ Item {
                 spacing: 8
 
                 Repeater {
-                    model: driveInfo.length
+                    model: usb.mounts.length
                     Rectangle {
-                        width: (parent.width - (driveInfo.length - 1) * 8) / driveInfo.length
+                        width: (parent.width - (usb.mounts.length - 1) * 8) / usb.mounts.length
                         height: parent.height
                         radius: 6
                         color: index === selectedDriveIndex ? Colors.brand : Colors.gray_600
@@ -132,8 +133,8 @@ Item {
                             anchors.centerIn: parent
                             font: Fonts.body_26
                             color: Colors.gray_100
-                            text: driveInfo[index].port
-                                ? qsTr("Port %1").arg(driveInfo[index].port.toUpperCase())
+                            text: usb.mounts[index].usb_port
+                                ? qsTr("Port %1").arg(usb.mounts[index].usb_port.toUpperCase())
                                 : qsTr("USB %1").arg(index + 1)
                         }
 
