@@ -150,6 +150,9 @@ Item {
                 minsamp = 0;
 
             var sxs = [];
+            for (var i = 0; i < minsamp; i++) {
+                sxs.push(0); // sxs is indexed with minsamp-based indexing below, rather than 0-based indexing; pad it out as needed
+            }
             for (var i = minsamp; i < samples.length; i++) {
                 sxs.push(to_xc(i + N_SAMPLES - samples.length));
             }
