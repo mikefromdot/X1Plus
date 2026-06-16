@@ -187,7 +187,7 @@ Item {
             ctx.lineWidth = 2;
             ctx.beginPath();
             for (var i = minsamp; i < samples.length; i++) {
-                ctx.lineTo(sxs[i], to_yc(samples[i][minsamp]));
+                ctx.lineTo(sxs[i], to_yc(samples[i][0]));
             }
             ctx.stroke();
 
