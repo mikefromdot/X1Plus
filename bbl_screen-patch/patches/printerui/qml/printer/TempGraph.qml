@@ -150,6 +150,9 @@ Item {
                 minsamp = 0;
 
             var sxs = [];
+            for (var i = 0; i < minsamp; i++) {
+                sxs.push(0); // sxs is indexed with minsamp-based indexing below, rather than 0-based indexing; pad it out as needed
+            }
             for (var i = minsamp; i < samples.length; i++) {
                 sxs.push(to_xc(i + N_SAMPLES - samples.length));
             }
@@ -184,7 +187,7 @@ Item {
             ctx.lineWidth = 2;
             ctx.beginPath();
             for (var i = minsamp; i < samples.length; i++) {
-                ctx.lineTo(sxs[i], to_yc(samples[i][minsamp]));
+                ctx.lineTo(sxs[i], to_yc(samples[i][0]));
             }
             ctx.stroke();
 
